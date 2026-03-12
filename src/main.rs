@@ -402,7 +402,6 @@ async fn main() -> Result<()> {
 
             // Load historical logs from database
             load_historical_logs(&logs);
-            let logs = Arc::new(Mutex::new(HashMap::new()));
 
             // Add startup log entry
             if let Ok(mut logs_guard) = logs.try_lock() {

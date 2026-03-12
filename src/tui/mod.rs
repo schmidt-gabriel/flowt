@@ -11,6 +11,7 @@
 
 use crate::config::{TriggerConfig, WorkflowConfig};
 use crate::engine::{Engine, SharedRuns, WorkflowRun};
+use crate::storage::StorageService;
 use chrono::{DateTime, Utc};
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -31,6 +32,7 @@ use std::sync::{Arc, Mutex};
 mod description_view;
 mod help_view;
 mod logs_view;
+mod node_detail_view;
 pub mod utils;
 mod workflows_view;
 
@@ -70,6 +72,14 @@ pub struct App {
     pub logs: SharedLogs,
     pub current_view: AppView,
     pub log_scroll: u16,
+    pub selected_node: usize,
+    pub node_detail_focused_panel: NodeDetailPanel,
+}
+
+#[derive(PartialEq)]
+pub enum NodeDetailPanel {
+    NodeList,
+    NodeContent,
 }
 
 #[derive(PartialEq)]
@@ -78,6 +88,7 @@ pub enum AppView {
     Logs,
     Description,
     Help,
+    NodeDetail,
 }
 
 #[derive(PartialEq)]
@@ -105,6 +116,8 @@ impl App {
             logs,
             current_view: AppView::Workflows,
             log_scroll: 0,
+            selected_node: 0,
+            node_detail_focused_panel: NodeDetailPanel::NodeList,
         }
     }
 
@@ -143,6 +156,8 @@ impl App {
                                         self.current_view = AppView::Workflows;
                                         self.detail_scroll = 0;
                                         self.log_scroll = 0;
+                                        self.selected_node = 0;
+                                        self.node_detail_focused_panel = NodeDetailPanel::NodeList;
                                     }
                                 }
                                 KeyCode::Char('?') => {
@@ -162,28 +177,73 @@ impl App {
                                         self.trigger_workflows();
                                     }
                                 }
+                                KeyCode::Esc => {
+                                    // Go back to workflows view from any other view
+                                    if self.current_view == AppView::NodeDetail {
+                                        self.current_view = AppView::Workflows;
+                                        self.detail_scroll = 0;
+                                        self.selected_node = 0;
+                                        self.node_detail_focused_panel = NodeDetailPanel::NodeList;
+                                    } else if self.current_view == AppView::Logs
+                                        || self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.current_view = AppView::Workflows;
+                                        self.detail_scroll = 0;
+                                        self.log_scroll = 0;
+                                    }
+                                }
                                 KeyCode::Char(' ') | KeyCode::Enter => {
-                                    if self.focused_panel == FocusedPanel::Workflows {
-                                        self.toggle_workflow_enabled();
+                                    if self.current_view == AppView::Workflows {
+                                        if self.focused_panel == FocusedPanel::Workflows {
+                                            self.toggle_workflow_enabled();
+                                        } else if self.focused_panel == FocusedPanel::Runs || self.focused_panel == FocusedPanel::NodeResults {
+                                            // Enter detailed view for the selected node
+                                            let workflow_runs = self.get_runs_and_scheduled_for_selected_workflow();
+                                            if let Some(RunOrScheduled::ActualRun(run)) = workflow_runs.get(self.selected_run) {
+                                                if !run.node_results.is_empty() {
+                                                    self.selected_node = 0; // Reset to first node
+                                                    self.current_view = AppView::NodeDetail;
+                                                    self.detail_scroll = 0;
+                                                    self.node_detail_focused_panel = NodeDetailPanel::NodeList; // Start with node list focused
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 KeyCode::Tab | KeyCode::Right => {
-                                    // Switch focus between panels (Tab and Right arrow)
-                                    self.focused_panel = match self.focused_panel {
-                                        FocusedPanel::Workflows => FocusedPanel::Runs,
-                                        FocusedPanel::Runs => FocusedPanel::NodeResults,
-                                        FocusedPanel::NodeResults => FocusedPanel::Workflows,
-                                    };
-                                    self.detail_scroll = 0; // Reset scroll when switching focus
+                                    if self.current_view == AppView::NodeDetail {
+                                        // In detail view, switch between panels
+                                        self.node_detail_focused_panel = match self.node_detail_focused_panel {
+                                            NodeDetailPanel::NodeList => NodeDetailPanel::NodeContent,
+                                            NodeDetailPanel::NodeContent => NodeDetailPanel::NodeList,
+                                        };
+                                    } else {
+                                        // Switch focus between panels (Tab and Right arrow)
+                                        self.focused_panel = match self.focused_panel {
+                                            FocusedPanel::Workflows => FocusedPanel::Runs,
+                                            FocusedPanel::Runs => FocusedPanel::NodeResults,
+                                            FocusedPanel::NodeResults => FocusedPanel::Workflows,
+                                        };
+                                        self.detail_scroll = 0; // Reset scroll when switching focus
+                                    }
                                 }
                                 KeyCode::Left => {
-                                    // Switch focus between panels in reverse (Left arrow)
-                                    self.focused_panel = match self.focused_panel {
-                                        FocusedPanel::Workflows => FocusedPanel::NodeResults,
-                                        FocusedPanel::Runs => FocusedPanel::Workflows,
-                                        FocusedPanel::NodeResults => FocusedPanel::Runs,
-                                    };
-                                    self.detail_scroll = 0; // Reset scroll when switching focus
+                                    if self.current_view == AppView::NodeDetail {
+                                        // In detail view, switch between panels
+                                        self.node_detail_focused_panel = match self.node_detail_focused_panel {
+                                            NodeDetailPanel::NodeList => NodeDetailPanel::NodeContent,
+                                            NodeDetailPanel::NodeContent => NodeDetailPanel::NodeList,
+                                        };
+                                    } else {
+                                        // Switch focus between panels in reverse (Left arrow)
+                                        self.focused_panel = match self.focused_panel {
+                                            FocusedPanel::Workflows => FocusedPanel::NodeResults,
+                                            FocusedPanel::Runs => FocusedPanel::Workflows,
+                                            FocusedPanel::NodeResults => FocusedPanel::Runs,
+                                        };
+                                        self.detail_scroll = 0; // Reset scroll when switching focus
+                                    }
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     if self.current_view == AppView::Logs {
@@ -192,6 +252,21 @@ impl App {
                                         || self.current_view == AppView::Help
                                     {
                                         self.detail_scroll = self.detail_scroll.saturating_add(1);
+                                    } else if self.current_view == AppView::NodeDetail {
+                                        match self.node_detail_focused_panel {
+                                            NodeDetailPanel::NodeList => {
+                                                let workflow_runs = self.get_runs_and_scheduled_for_selected_workflow();
+                                                if let Some(RunOrScheduled::ActualRun(run)) = workflow_runs.get(self.selected_run) {
+                                                    if self.selected_node + 1 < run.node_results.len() && !run.node_results.is_empty() {
+                                                        self.selected_node += 1;
+                                                        self.detail_scroll = 0; // Reset scroll when selecting new node
+                                                    }
+                                                }
+                                            }
+                                            NodeDetailPanel::NodeContent => {
+                                                self.detail_scroll = self.detail_scroll.saturating_add(1);
+                                            }
+                                        }
                                     } else {
                                         match self.focused_panel {
                                             FocusedPanel::Workflows => {
@@ -228,6 +303,18 @@ impl App {
                                         || self.current_view == AppView::Help
                                     {
                                         self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                                    } else if self.current_view == AppView::NodeDetail {
+                                        match self.node_detail_focused_panel {
+                                            NodeDetailPanel::NodeList => {
+                                                if self.selected_node > 0 {
+                                                    self.selected_node -= 1;
+                                                    self.detail_scroll = 0; // Reset scroll when selecting new node
+                                                }
+                                            }
+                                            NodeDetailPanel::NodeContent => {
+                                                self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                                            }
+                                        }
                                     } else {
                                         match self.focused_panel {
                                             FocusedPanel::Workflows => {
@@ -255,6 +342,7 @@ impl App {
                                         self.log_scroll = self.log_scroll.saturating_add(10);
                                     } else if self.current_view == AppView::Description
                                         || self.current_view == AppView::Help
+                                        || self.current_view == AppView::NodeDetail
                                     {
                                         self.detail_scroll = self.detail_scroll.saturating_add(10);
                                     } else if self.focused_panel == FocusedPanel::NodeResults {
@@ -266,10 +354,31 @@ impl App {
                                         self.log_scroll = self.log_scroll.saturating_sub(10);
                                     } else if self.current_view == AppView::Description
                                         || self.current_view == AppView::Help
+                                        || self.current_view == AppView::NodeDetail
                                     {
                                         self.detail_scroll = self.detail_scroll.saturating_sub(10);
                                     } else if self.focused_panel == FocusedPanel::NodeResults {
                                         self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                                    }
+                                }
+                                KeyCode::Home => {
+                                    if self.current_view == AppView::NodeDetail
+                                        || self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = 0;
+                                    } else if self.current_view == AppView::Logs {
+                                        self.log_scroll = 0;
+                                    }
+                                }
+                                KeyCode::End => {
+                                    if self.current_view == AppView::NodeDetail
+                                        || self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = 1000; // Large number to go to bottom
+                                    } else if self.current_view == AppView::Logs {
+                                        self.log_scroll = 1000;
                                     }
                                 }
                                 _ => {}
@@ -310,6 +419,7 @@ impl App {
             AppView::Logs => self.draw_logs_view(f),
             AppView::Description => self.draw_description_view(f),
             AppView::Help => self.draw_help_view(f),
+            AppView::NodeDetail => self.draw_node_detail_view(f),
         }
     }
 
@@ -319,16 +429,23 @@ impl App {
             level: LogLevel::Info,
             message,
         };
+        
+        // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
                 .entry(workflow_name.to_string())
                 .or_insert_with(Vec::new);
-            workflow_logs.push(entry);
+            workflow_logs.push(entry.clone());
             // Keep only the last 1000 log entries per workflow
             if workflow_logs.len() > 1000 {
                 let excess = workflow_logs.len() - 1000;
                 workflow_logs.drain(0..excess);
             }
+        }
+        
+        // Also persist to database
+        if let Ok(storage) = StorageService::new() {
+            let _ = storage.save_log_entry(workflow_name, &entry);
         }
     }
 
@@ -338,15 +455,22 @@ impl App {
             level: LogLevel::Warning,
             message,
         };
+        
+        // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
                 .entry(workflow_name.to_string())
                 .or_insert_with(Vec::new);
-            workflow_logs.push(entry);
+            workflow_logs.push(entry.clone());
             if workflow_logs.len() > 1000 {
                 let excess = workflow_logs.len() - 1000;
                 workflow_logs.drain(0..excess);
             }
+        }
+        
+        // Also persist to database
+        if let Ok(storage) = StorageService::new() {
+            let _ = storage.save_log_entry(workflow_name, &entry);
         }
     }
 
@@ -356,15 +480,22 @@ impl App {
             level: LogLevel::Error,
             message,
         };
+        
+        // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
                 .entry(workflow_name.to_string())
                 .or_insert_with(Vec::new);
-            workflow_logs.push(entry);
+            workflow_logs.push(entry.clone());
             if workflow_logs.len() > 1000 {
                 let excess = workflow_logs.len() - 1000;
                 workflow_logs.drain(0..excess);
             }
+        }
+        
+        // Also persist to database
+        if let Ok(storage) = StorageService::new() {
+            let _ = storage.save_log_entry(workflow_name, &entry);
         }
     }
 

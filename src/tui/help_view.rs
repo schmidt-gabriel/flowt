@@ -43,6 +43,7 @@ impl App {
             )]),
             Line::from(""),
             Line::from("  Space/Enter  Toggle workflow enabled/disabled state"),
+            Line::from("  Enter        View detailed node results (when focused on runs or results panel)"),
             Line::from("  t            Trigger the selected workflow manually"),
             Line::from("  r            Refresh workflow list and data"),
             Line::from(""),
@@ -57,6 +58,20 @@ impl App {
             Line::from("  d            Show description of selected workflow"),
             Line::from("  w            Return to main workflows view (from any view)"),
             Line::from("  ?            Show this help screen"),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Node Detail View:",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from("  Enter        Enter detail view (from results panel)"),
+            Line::from("  Esc          Return to workflows view"),
+            Line::from("  ←/→          Switch between node list and content panels"),
+            Line::from("  ↑/↓          Select nodes (left panel) or scroll content (right panel)"),
+            Line::from("  PgUp/PgDn    Fast scroll through content"),
+            Line::from("  Home/End     Jump to top/bottom of content"),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Workflow Status Icons:",
@@ -134,6 +149,8 @@ impl App {
             Line::from(""),
             Line::from("  • Workflows are loaded from YAML files in the workflows directory"),
             Line::from("  • Use Space to enable/disable workflows"),
+            Line::from("  • Focus the runs panel (Tab/→) and press Enter for detailed view"),
+            Line::from("  • Detail view shows full shell output and JSON API responses"),
             Line::from("  • Cron workflows show their next scheduled run time"),
             Line::from("  • Logs are specific to each workflow"),
             Line::from("  • Use 'r' to refresh if you've added new workflow files"),
@@ -159,6 +176,7 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled("| w workflows ", Style::default().fg(Color::DarkGray)),
+            Span::styled("| Esc return ", Style::default().fg(Color::DarkGray)),
             Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
         ]));
         f.render_widget(help, chunks[1]);

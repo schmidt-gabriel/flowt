@@ -234,7 +234,21 @@ impl App {
 
         // Define help items in order of priority (most important first)
 
-        let help_items = if area.width >= 120 {
+        let help_items = if area.width >= 130 {
+            // Full help bar for wide terminals
+            vec![
+                " ↑/↓ navigate/scroll ",
+                "| Tab/←/→ switch panel ",
+                "| Space toggle enable ",
+                "| Enter details ",
+                "| r refresh ",
+                "| l logs ",
+                "| d describe ",
+                "| t trigger ",
+                "| ? help ",
+                "| q quit ",
+            ]
+        } else if area.width >= 120 {
             // Full help bar for wide terminals
             vec![
                 " ↑/↓ navigate/scroll ",
@@ -253,9 +267,19 @@ impl App {
                 " ↑/↓ nav ",
                 "| Tab/←/→ panel ",
                 "| Space toggle ",
+                "| Enter details ",
                 "| r refresh ",
                 "| l logs ",
                 "| t trigger ",
+                "| ? help ",
+                "| q quit ",
+            ]
+        } else if area.width >= 60 {
+            // Compact help bar
+            vec![
+                " ↑/↓ nav ",
+                "| ←/→ panel ",
+                "| Enter details ",
                 "| ? help ",
                 "| q quit ",
             ]
