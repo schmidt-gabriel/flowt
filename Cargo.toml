@@ -21,3 +21,4 @@ chrono = { version = "0.4", features = ["serde"] }
 colored = "2"
 clap = { version = "4", features = ["derive"] }
 cron = "0.12"
+dotenv = "0.15"

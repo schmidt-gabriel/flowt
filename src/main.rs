@@ -3,6 +3,7 @@ mod engine;
 mod tui;
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use config::{TriggerConfig, WorkflowConfig};
 use engine::Engine;
@@ -22,6 +23,8 @@ fn default_workflows_dir() -> String {
 }
 
 async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: SharedLogs) {
+    let mut last_execution_times: HashMap<String, DateTime<Utc>> = HashMap::new();
+    
     loop {
         let now = chrono::Utc::now();
 
@@ -31,84 +34,91 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                     for trigger in &workflow.triggers {
                         if let TriggerConfig::Cron { schedule } = trigger {
                             if let Ok(cron_schedule) = cron::Schedule::from_str(schedule) {
-                                // Check if the current minute matches the cron schedule
+                                // Check if this is a scheduled time
                                 if let Some(next) = cron_schedule.upcoming(chrono::Utc).next() {
-                                    // If the next run is within the next minute, run it now
+                                    // Check if we're at or past the scheduled time
                                     let time_to_next = (next - now).num_seconds();
+                                    
+                                    if time_to_next == 0 {
+                                        // Create execution key based on scheduled time
+                                        let execution_key = format!("{}_{}", workflow.name, next.format("%Y%m%d%H%M"));
+                                        
+                                        if !last_execution_times.contains_key(&execution_key) {
+                                            last_execution_times.insert(execution_key, next);
+                                            
+                                            // Clean up old execution records (keep only last 2 minutes)
+                                            let cutoff_time = now - chrono::Duration::minutes(2);
+                                            last_execution_times.retain(|_, &mut time| time > cutoff_time);
 
-                                    if time_to_next <= 60 && time_to_next >= 0 {
-                                        // Log cron trigger
-                                        if let Ok(mut logs_guard) = logs.try_lock() {
-                                            let workflow_logs = logs_guard
-                                                .entry(workflow.name.clone())
-                                                .or_insert_with(Vec::new);
-                                            workflow_logs.push(LogEntry {
-                                                timestamp: chrono::Utc::now(),
-                                                level: LogLevel::Info,
-                                                message: format!(
-                                                    "Cron triggered workflow: {}",
-                                                    workflow.name
-                                                ),
-                                            });
-                                        }
+                                            // Log cron trigger
+                                            if let Ok(mut logs_guard) = logs.try_lock() {
+                                                let workflow_logs = logs_guard
+                                                    .entry(workflow.name.clone())
+                                                    .or_insert_with(Vec::new);
+                                                workflow_logs.push(LogEntry {
+                                                    timestamp: chrono::Utc::now(),
+                                                    level: LogLevel::Info,
+                                                    message: format!(
+                                                        "Cron triggered workflow: {}",
+                                                        workflow.name
+                                                    ),
+                                                });
+                                            }
 
-                                        let engine_clone = engine.clone();
-                                        let workflow_clone = workflow.clone();
-                                        let workflow_name = workflow.name.clone();
-                                        let logs_clone = logs.clone();
-                                        tokio::spawn(async move {
-                                            match engine_clone.run_workflow(&workflow_clone).await {
-                                                Ok(run) => {
-                                                    if let Ok(mut logs_guard) =
-                                                        logs_clone.try_lock()
-                                                    {
-                                                        match run.status {
-                                                            engine::RunStatus::Success => {
-                                                                let workflow_logs = logs_guard
-                                                                    .entry(workflow_name.clone())
-                                                                    .or_insert_with(Vec::new);
-                                                                workflow_logs.push(LogEntry {
-                                                                    timestamp: chrono::Utc::now(),
-                                                                    level: LogLevel::Info,
-                                                                    message: format!("Cron workflow completed: {}", workflow_name),
-                                                                });
+                                            let engine_clone = engine.clone();
+                                            let workflow_clone = workflow.clone();
+                                            let workflow_name = workflow.name.clone();
+                                            let logs_clone = logs.clone();
+                                            tokio::spawn(async move {
+                                                match engine_clone.run_workflow(&workflow_clone).await {
+                                                    Ok(run) => {
+                                                        if let Ok(mut logs_guard) = logs_clone.try_lock() {
+                                                            match run.status {
+                                                                engine::RunStatus::Success => {
+                                                                    let workflow_logs = logs_guard
+                                                                        .entry(workflow_name.clone())
+                                                                        .or_insert_with(Vec::new);
+                                                                    workflow_logs.push(LogEntry {
+                                                                        timestamp: chrono::Utc::now(),
+                                                                        level: LogLevel::Info,
+                                                                        message: format!("Cron workflow completed: {}", workflow_name),
+                                                                    });
+                                                                }
+                                                                engine::RunStatus::Failed => {
+                                                                    let workflow_logs = logs_guard
+                                                                        .entry(workflow_name.clone())
+                                                                        .or_insert_with(Vec::new);
+                                                                    workflow_logs.push(LogEntry {
+                                                                        timestamp: chrono::Utc::now(),
+                                                                        level: LogLevel::Error,
+                                                                        message: format!(
+                                                                            "Cron workflow failed: {}",
+                                                                            workflow_name
+                                                                        ),
+                                                                    });
+                                                                }
+                                                                _ => {}
                                                             }
-                                                            engine::RunStatus::Failed => {
-                                                                let workflow_logs = logs_guard
-                                                                    .entry(workflow_name.clone())
-                                                                    .or_insert_with(Vec::new);
-                                                                workflow_logs.push(LogEntry {
-                                                                    timestamp: chrono::Utc::now(),
-                                                                    level: LogLevel::Error,
-                                                                    message: format!(
-                                                                        "Cron workflow failed: {}",
-                                                                        workflow_name
-                                                                    ),
-                                                                });
-                                                            }
-                                                            _ => {}
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        if let Ok(mut logs_guard) = logs_clone.try_lock() {
+                                                            let workflow_logs = logs_guard
+                                                                .entry(workflow_name.clone())
+                                                                .or_insert_with(Vec::new);
+                                                            workflow_logs.push(LogEntry {
+                                                                timestamp: chrono::Utc::now(),
+                                                                level: LogLevel::Error,
+                                                                message: format!(
+                                                                    "Cron workflow error {}: {}",
+                                                                    workflow_name, e
+                                                                ),
+                                                            });
                                                         }
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    if let Ok(mut logs_guard) =
-                                                        logs_clone.try_lock()
-                                                    {
-                                                        let workflow_logs = logs_guard
-                                                            .entry(workflow_name.clone())
-                                                            .or_insert_with(Vec::new);
-                                                        workflow_logs.push(LogEntry {
-                                                            timestamp: chrono::Utc::now(),
-                                                            level: LogLevel::Error,
-                                                            message: format!(
-                                                                "Cron workflow error {}: {}",
-                                                                workflow_name, e
-                                                            ),
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                        });
+                                            });
+                                        }
                                     }
                                 }
                             } else {
@@ -144,8 +154,8 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
             }
         }
 
-        // Check every 60 seconds to avoid duplicate runs
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        // Check every 1 second for precise cron timing
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -186,6 +196,9 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load environment variables from .env file if it exists
+    dotenv::dotenv().ok();
+    
     let cli = Cli::parse();
 
     // Create workflows directory if it doesn't exist (when using default TUI mode)

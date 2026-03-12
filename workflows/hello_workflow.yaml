@@ -3,10 +3,9 @@ description: Initial Checks
 enabled: true
 triggers:
 - type: cron
-  schedule: "0 * * * * *"
+  schedule: "0 */5 * * * *"
 
 nodes:
-
 - id: hello-world
   type: shell
   cmd: echo "Hello, World!"
