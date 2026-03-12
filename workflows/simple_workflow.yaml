@@ -2,13 +2,13 @@ name: Manual Workflow
 description: Manual workflow
 enabled: true
 triggers:
-  - type: manual
-
+- type: manual
 nodes:
-  - id: my-system
-    type: shell
-    cmd: echo "Running on $(uname -s) with $(uname -r)"
-    env: {}
-    when: null
-    retry: null
-    timeout: null
+- id: my-system
+  type: shell
+  cmd: echo "Running on $(uname -s) with $(uname -r)"
+  env: {}
+  when: null
+  retry: null
+  timeout: null
+  depends_on: []

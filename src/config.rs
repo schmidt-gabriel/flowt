@@ -134,6 +134,9 @@ impl WorkflowConfig {
             }
         }
 
+        // Sort workflows by name for consistent ordering
+        workflows.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(workflows)
     }
 }

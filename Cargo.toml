@@ -22,3 +22,4 @@ colored = "2"
 clap = { version = "4", features = ["derive"] }
 cron = "0.12"
 dotenv = "0.15"
+regex = "1"

@@ -229,25 +229,51 @@ impl App {
 
         f.render_widget(detail, chunks[2]);
 
-        // Bottom help bar
-        let help = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " ↑/↓ navigate/scroll ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("| Tab switch panel ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "| Space toggle enable ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("| r refresh ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| l logs ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| d describe ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| t trigger ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| ? help ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
-        ]));
+        // Bottom help bar - responsive based on terminal width
         let area = f.size();
+        
+        // Define help items in order of priority (most important first)
+        let help_items = if area.width >= 120 {
+            // Full help bar for wide terminals
+            vec![
+                " ↑/↓ navigate/scroll ",
+                "| Tab/←/→ switch panel ",
+                "| Space toggle enable ",
+                "| r refresh ",
+                "| l logs ",
+                "| d describe ",
+                "| t trigger ",
+                "| ? help ",
+                "| q quit ",
+            ]
+        } else if area.width >= 90 {
+            // Medium help bar - remove less critical items
+            vec![
+                " ↑/↓ nav ",
+                "| Tab/←/→ panel ",
+                "| Space toggle ",
+                "| r refresh ",
+                "| l logs ",
+                "| t trigger ",
+                "| ? help ",
+                "| q quit ",
+            ]
+        }  else {
+            // Minimal help bar for very narrow terminals
+            vec![
+                " ↑/↓ ",
+                "| ←/→ ",
+                "| ? help ",
+                "| q quit ",
+            ]
+        };
+        
+        let help = Paragraph::new(Line::from(
+            help_items.into_iter()
+                .map(|text| Span::styled(text, Style::default().fg(Color::DarkGray)))
+                .collect::<Vec<_>>()
+        ));
+        
         let help_area = Rect {
             x: 0,
             y: area.height.saturating_sub(1),

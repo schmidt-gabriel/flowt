@@ -1,21 +1,37 @@
 name: Cron Workflow
-description: Simple scheduled workflow  
+description: Simple scheduled workflow
 enabled: true
 triggers:
-  - type: cron
-    schedule: "0 */10 * * * *"  # Every 10 minutes
-
+- type: cron
+  schedule: 0 */10 * * * *
 nodes:
   - id: hello-step
     type: shell
     cmd: echo "Hello from scheduled workflow at $(date)"
     env: {}
+    when: null
+    retry: null
+    timeout: null
+    depends_on: []
 
   - id: http-step
     type: http
-    url: "https://jsonplaceholder.typicode.com/todos/1"
+    url: https://jsonplaceholder.typicode.com/todos/1
     method: GET
+    headers: {}
+    body: null
     expect_status: 200
+    when: null
     retry: 3
-    timeout: "30s"
-    depends_on: ["hello-step"]
+    timeout: 30s
+    depends_on:
+      - hello-step
+
+  - id: process-response
+    type: log
+    message: 'Next node: Title: ${steps.http-step.response.title}'
+    when: null
+    retry: null
+    timeout: null
+    depends_on:
+      - http-step

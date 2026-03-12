@@ -27,7 +27,7 @@ impl App {
             Line::from(""),
             Line::from("  ↑/↓/j/k     Navigate up/down in lists and scroll in detail views"),
             Line::from("  PgUp/PgDn    Fast scroll in logs, descriptions, and help"),
-            Line::from("  Tab          Switch focus between panels (Workflows → Runs → Results)"),
+            Line::from("  Tab/←/→      Switch focus between panels (Workflows → Runs → Results)"),
             Line::from(""),
             Line::from(vec![
                 Span::styled("Workflow Management:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

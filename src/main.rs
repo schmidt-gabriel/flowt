@@ -363,9 +363,6 @@ async fn main() -> Result<()> {
                 });
             }
 
-            let workflows =
-                WorkflowConfig::load_all(&cli.dir, Some(logs.clone())).unwrap_or_default();
-
             // Start cron scheduler in background
             let engine_cron = engine.clone();
             let dir_cron = cli.dir.clone();
@@ -374,49 +371,8 @@ async fn main() -> Result<()> {
                 start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
             });
 
-            // Run all enabled manual-trigger workflows in background
-            let mut auto_run_count = 0;
-            for wf in workflows {
-                if wf.enabled {
-                    // Only auto-run workflows with manual triggers
-                    let has_manual_trigger = wf
-                        .triggers
-                        .iter()
-                        .any(|t| matches!(t, TriggerConfig::Manual));
-                    if has_manual_trigger {
-                        auto_run_count += 1;
-                        let workflow_name = wf.name.clone();
-                        let engine_clone = engine.clone();
-                        let logs_clone = logs.clone();
-                        tokio::spawn(async move {
-                            if let Ok(mut logs_guard) = logs_clone.try_lock() {
-                                let workflow_logs = logs_guard
-                                    .entry(workflow_name.clone())
-                                    .or_insert_with(Vec::new);
-                                workflow_logs.push(LogEntry {
-                                    timestamp: chrono::Utc::now(),
-                                    level: LogLevel::Info,
-                                    message: format!("Auto-starting workflow: {}", workflow_name),
-                                });
-                            }
-                            let _ = engine_clone.run_workflow(&wf).await;
-                        });
-                    }
-                }
-            }
-
-            if auto_run_count > 0 {
-                if let Ok(mut logs_guard) = logs.try_lock() {
-                    let system_logs = logs_guard
-                        .entry("System".to_string())
-                        .or_insert_with(Vec::new);
-                    system_logs.push(LogEntry {
-                        timestamp: chrono::Utc::now(),
-                        level: LogLevel::Info,
-                        message: format!("Started {} workflows automatically", auto_run_count),
-                    });
-                }
-            }
+            // Manual workflows are triggered explicitly through the TUI interface
+            // No auto-execution of manual workflows at startup
 
             let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
             app.run()?;

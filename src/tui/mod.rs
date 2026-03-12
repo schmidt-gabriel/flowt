@@ -160,12 +160,21 @@ impl App {
                                 self.toggle_workflow_enabled();
                             }
                         }
-                        KeyCode::Tab => {
-                            // Switch focus between panels
+                        KeyCode::Tab | KeyCode::Right => {
+                            // Switch focus between panels (Tab and Right arrow)
                             self.focused_panel = match self.focused_panel {
                                 FocusedPanel::Workflows => FocusedPanel::Runs,
                                 FocusedPanel::Runs => FocusedPanel::NodeResults,
                                 FocusedPanel::NodeResults => FocusedPanel::Workflows,
+                            };
+                            self.detail_scroll = 0; // Reset scroll when switching focus
+                        }
+                        KeyCode::Left => {
+                            // Switch focus between panels in reverse (Left arrow)
+                            self.focused_panel = match self.focused_panel {
+                                FocusedPanel::Workflows => FocusedPanel::NodeResults,
+                                FocusedPanel::Runs => FocusedPanel::Workflows,
+                                FocusedPanel::NodeResults => FocusedPanel::Runs,
                             };
                             self.detail_scroll = 0; // Reset scroll when switching focus
                         }
