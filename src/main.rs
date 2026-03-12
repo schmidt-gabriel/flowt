@@ -12,6 +12,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tui::{LogEntry, LogLevel, SharedLogs};
 
+fn default_workflows_dir() -> String {
+    std::env::var("FLOWT_DIR")
+        .map(|dir| format!("{}/workflows", dir))
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.flowt/workflows", home)
+        })
+}
+
 async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: SharedLogs) {
     loop {
         let now = chrono::Utc::now();
@@ -30,14 +39,19 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                                     if time_to_next <= 60 && time_to_next >= 0 {
                                         // Log cron trigger
                                         if let Ok(mut logs_guard) = logs.try_lock() {
-                                            let workflow_logs = logs_guard.entry(workflow.name.clone()).or_insert_with(Vec::new);
+                                            let workflow_logs = logs_guard
+                                                .entry(workflow.name.clone())
+                                                .or_insert_with(Vec::new);
                                             workflow_logs.push(LogEntry {
                                                 timestamp: chrono::Utc::now(),
                                                 level: LogLevel::Info,
-                                                message: format!("Cron triggered workflow: {}", workflow.name),
+                                                message: format!(
+                                                    "Cron triggered workflow: {}",
+                                                    workflow.name
+                                                ),
                                             });
                                         }
-                                        
+
                                         let engine_clone = engine.clone();
                                         let workflow_clone = workflow.clone();
                                         let workflow_name = workflow.name.clone();
@@ -45,35 +59,51 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                                         tokio::spawn(async move {
                                             match engine_clone.run_workflow(&workflow_clone).await {
                                                 Ok(run) => {
-                                                    if let Ok(mut logs_guard) = logs_clone.try_lock() {
+                                                    if let Ok(mut logs_guard) =
+                                                        logs_clone.try_lock()
+                                                    {
                                                         match run.status {
                                                             engine::RunStatus::Success => {
-                                                                let workflow_logs = logs_guard.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                                                let workflow_logs = logs_guard
+                                                                    .entry(workflow_name.clone())
+                                                                    .or_insert_with(Vec::new);
                                                                 workflow_logs.push(LogEntry {
                                                                     timestamp: chrono::Utc::now(),
                                                                     level: LogLevel::Info,
                                                                     message: format!("Cron workflow completed: {}", workflow_name),
                                                                 });
-                                                            },
+                                                            }
                                                             engine::RunStatus::Failed => {
-                                                                let workflow_logs = logs_guard.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                                                let workflow_logs = logs_guard
+                                                                    .entry(workflow_name.clone())
+                                                                    .or_insert_with(Vec::new);
                                                                 workflow_logs.push(LogEntry {
                                                                     timestamp: chrono::Utc::now(),
                                                                     level: LogLevel::Error,
-                                                                    message: format!("Cron workflow failed: {}", workflow_name),
+                                                                    message: format!(
+                                                                        "Cron workflow failed: {}",
+                                                                        workflow_name
+                                                                    ),
                                                                 });
-                                                            },
+                                                            }
                                                             _ => {}
                                                         }
                                                     }
-                                                },
+                                                }
                                                 Err(e) => {
-                                                    if let Ok(mut logs_guard) = logs_clone.try_lock() {
-                                                        let workflow_logs = logs_guard.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                                    if let Ok(mut logs_guard) =
+                                                        logs_clone.try_lock()
+                                                    {
+                                                        let workflow_logs = logs_guard
+                                                            .entry(workflow_name.clone())
+                                                            .or_insert_with(Vec::new);
                                                         workflow_logs.push(LogEntry {
                                                             timestamp: chrono::Utc::now(),
                                                             level: LogLevel::Error,
-                                                            message: format!("Cron workflow error {}: {}", workflow_name, e),
+                                                            message: format!(
+                                                                "Cron workflow error {}: {}",
+                                                                workflow_name, e
+                                                            ),
                                                         });
                                                     }
                                                 }
@@ -83,11 +113,16 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                                 }
                             } else {
                                 if let Ok(mut logs_guard) = logs.try_lock() {
-                                    let workflow_logs = logs_guard.entry(workflow.name.clone()).or_insert_with(Vec::new);
+                                    let workflow_logs = logs_guard
+                                        .entry(workflow.name.clone())
+                                        .or_insert_with(Vec::new);
                                     workflow_logs.push(LogEntry {
                                         timestamp: chrono::Utc::now(),
                                         level: LogLevel::Error,
-                                        message: format!("Invalid cron schedule: {} for workflow: {}", schedule, workflow.name),
+                                        message: format!(
+                                            "Invalid cron schedule: {} for workflow: {}",
+                                            schedule, workflow.name
+                                        ),
                                     });
                                 }
                             }
@@ -98,7 +133,9 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
         } else {
             // Log error to shared logs if available
             if let Ok(mut logs_guard) = logs.try_lock() {
-                let system_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                let system_logs = logs_guard
+                    .entry("System".to_string())
+                    .or_insert_with(Vec::new);
                 system_logs.push(LogEntry {
                     timestamp: chrono::Utc::now(),
                     level: LogLevel::Error,
@@ -120,7 +157,7 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
 )]
 struct Cli {
     /// Directory containing workflow YAML files (used when launching TUI by default)
-    #[arg(short, long, default_value = "./workflows")]
+    #[arg(short, long, default_value_t = default_workflows_dir())]
     dir: String,
 
     #[command(subcommand)]
@@ -137,12 +174,12 @@ enum Commands {
     /// Launch the TUI dashboard
     Tui {
         /// Directory containing workflow YAML files
-        #[arg(default_value = "./workflows")]
+        #[arg(default_value_t = default_workflows_dir())]
         dir: String,
     },
     /// List workflows in a directory
     List {
-        #[arg(default_value = "./workflows")]
+        #[arg(default_value_t = default_workflows_dir())]
         dir: String,
     },
 }
@@ -150,6 +187,20 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Create workflows directory if it doesn't exist (when using default TUI mode)
+    let workflows_dir = match &cli.command {
+        Some(Commands::Tui { dir }) => dir,
+        Some(Commands::List { dir }) => dir,
+        None => &cli.dir,
+        _ => &cli.dir,
+    };
+    if let Err(e) = std::fs::create_dir_all(workflows_dir) {
+        return Err(anyhow::anyhow!(
+            "Failed to create workflows directory: {}",
+            e
+        ));
+    }
 
     match cli.command {
         Some(Commands::Run { file }) => {
@@ -163,7 +214,7 @@ async fn main() -> Result<()> {
                 let icon = match &result.status {
                     engine::NodeStatus::Success => "✔",
                     engine::NodeStatus::Failed(_) => "✘",
-                    _ => "–",
+                    _ => "-",
                 };
                 println!("  {} [{}] {}", icon, result.node_id, result.output);
             }
@@ -192,20 +243,22 @@ async fn main() -> Result<()> {
         Some(Commands::Tui { dir }) => {
             let engine = Arc::new(Engine::new());
             let runs = engine.runs.clone();
-            
+
             // Create shared logs
             let logs = Arc::new(Mutex::new(HashMap::new()));
-            
+
             // Add startup log entry
             if let Ok(mut logs_guard) = logs.try_lock() {
-                let system_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                let system_logs = logs_guard
+                    .entry("System".to_string())
+                    .or_insert_with(Vec::new);
                 system_logs.push(LogEntry {
                     timestamp: chrono::Utc::now(),
                     level: LogLevel::Info,
                     message: format!("Flowt started - monitoring workflows in: {}", dir),
                 });
             }
-            
+
             let workflows = WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
 
             // Start cron scheduler in background
@@ -221,7 +274,10 @@ async fn main() -> Result<()> {
             for wf in workflows {
                 if wf.enabled {
                     // Only auto-run workflows with manual triggers
-                    let has_manual_trigger = wf.triggers.iter().any(|t| matches!(t, TriggerConfig::Manual));
+                    let has_manual_trigger = wf
+                        .triggers
+                        .iter()
+                        .any(|t| matches!(t, TriggerConfig::Manual));
                     if has_manual_trigger {
                         auto_run_count += 1;
                         let workflow_name = wf.name.clone();
@@ -229,7 +285,9 @@ async fn main() -> Result<()> {
                         let logs_clone = logs.clone();
                         tokio::spawn(async move {
                             if let Ok(mut logs_guard) = logs_clone.try_lock() {
-                                let workflow_logs = logs_guard.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                let workflow_logs = logs_guard
+                                    .entry(workflow_name.clone())
+                                    .or_insert_with(Vec::new);
                                 workflow_logs.push(LogEntry {
                                     timestamp: chrono::Utc::now(),
                                     level: LogLevel::Info,
@@ -241,10 +299,12 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
+
             if auto_run_count > 0 {
                 if let Ok(mut logs_guard) = logs.try_lock() {
-                    let system_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                    let system_logs = logs_guard
+                        .entry("System".to_string())
+                        .or_insert_with(Vec::new);
                     system_logs.push(LogEntry {
                         timestamp: chrono::Utc::now(),
                         level: LogLevel::Info,
@@ -261,21 +321,24 @@ async fn main() -> Result<()> {
             // Default to TUI mode with the default directory
             let engine = Arc::new(Engine::new());
             let runs = engine.runs.clone();
-            
+
             // Create shared logs
             let logs = Arc::new(Mutex::new(HashMap::new()));
-            
+
             // Add startup log entry
             if let Ok(mut logs_guard) = logs.try_lock() {
-                let system_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                let system_logs = logs_guard
+                    .entry("System".to_string())
+                    .or_insert_with(Vec::new);
                 system_logs.push(LogEntry {
                     timestamp: chrono::Utc::now(),
                     level: LogLevel::Info,
                     message: format!("Flowt started - monitoring workflows in: {}", cli.dir),
                 });
             }
-            
-            let workflows = WorkflowConfig::load_all(&cli.dir, Some(logs.clone())).unwrap_or_default();
+
+            let workflows =
+                WorkflowConfig::load_all(&cli.dir, Some(logs.clone())).unwrap_or_default();
 
             // Start cron scheduler in background
             let engine_cron = engine.clone();
@@ -290,7 +353,10 @@ async fn main() -> Result<()> {
             for wf in workflows {
                 if wf.enabled {
                     // Only auto-run workflows with manual triggers
-                    let has_manual_trigger = wf.triggers.iter().any(|t| matches!(t, TriggerConfig::Manual));
+                    let has_manual_trigger = wf
+                        .triggers
+                        .iter()
+                        .any(|t| matches!(t, TriggerConfig::Manual));
                     if has_manual_trigger {
                         auto_run_count += 1;
                         let workflow_name = wf.name.clone();
@@ -298,7 +364,9 @@ async fn main() -> Result<()> {
                         let logs_clone = logs.clone();
                         tokio::spawn(async move {
                             if let Ok(mut logs_guard) = logs_clone.try_lock() {
-                                let workflow_logs = logs_guard.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                let workflow_logs = logs_guard
+                                    .entry(workflow_name.clone())
+                                    .or_insert_with(Vec::new);
                                 workflow_logs.push(LogEntry {
                                     timestamp: chrono::Utc::now(),
                                     level: LogLevel::Info,
@@ -310,10 +378,12 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
+
             if auto_run_count > 0 {
                 if let Ok(mut logs_guard) = logs.try_lock() {
-                    let system_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                    let system_logs = logs_guard
+                        .entry("System".to_string())
+                        .or_insert_with(Vec::new);
                     system_logs.push(LogEntry {
                         timestamp: chrono::Utc::now(),
                         level: LogLevel::Info,

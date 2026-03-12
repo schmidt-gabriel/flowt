@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+fn default_cache_dir() -> String {
+    std::env::var("FLOWT_DIR")
+        .map(|dir| format!("{}/cache", dir))
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.flowt/cache", home)
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeStatus {
     Pending,
@@ -144,9 +153,7 @@ impl Engine {
 
 async fn run_http(url: &str, method: &str, expect_status: Option<u16>, run_id: &str) -> (NodeStatus, String) {
     let expected = expect_status.unwrap_or(200);
-    
-    // Create .cache directory if it doesn't exist
-    let cache_dir = format!("{}/.cache/flowt", std::env::var("HOME").unwrap_or_default());
+    let cache_dir = default_cache_dir();
     if let Err(e) = std::fs::create_dir_all(&cache_dir) {
         return (NodeStatus::Failed(format!("Failed to create cache directory: {}", e)), String::new());
     }

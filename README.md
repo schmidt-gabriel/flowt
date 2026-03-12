@@ -202,9 +202,35 @@ flowt/
 
 ## Configuration
 
+### Directory Configuration
+
+Flowt uses configurable directories for workflows and cache storage. You can customize these locations using environment variables or command-line arguments.
+
+#### Environment Variables
+
+Flowt supports the following environment variables for directory configuration:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FLOWT_DIR` | Base directory for all Flowt data | `~/.flowt` |
+
+#### Examples
+
+```bash
+# Use default locations
+flowt
+
+# Set base directory (workflows in /my/flowt/workflows, cache in /my/flowt/cache)
+export FLOWT_DIR="/my/flowt"
+flowt
+
+# Override with command line
+flowt --dir "/another/path"
+```
+
 ### Workflow Directory
 
-By default, Flowt looks for workflows in the `./workflows` directory. You can specify a different directory:
+You can specify a different workflows directory using the command line:
 
 ```bash
 flowt tui /path/to/my/workflows
