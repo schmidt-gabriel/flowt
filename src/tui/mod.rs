@@ -1,17 +1,17 @@
 //! Terminal User Interface (TUI) module for the flowt workflow automation tool.
-//! 
+//!
 //! This module implements a terminal-based interface for managing and monitoring workflows.
 //! The TUI is organized into separate view modules:
-//! 
+//!
 //! - `workflows_view.rs` - Main workflow management screen
-//! - `logs_view.rs` - Logs display screen 
+//! - `logs_view.rs` - Logs display screen
 //! - `description_view.rs` - Workflow description screen
 //! - `help_view.rs` - Help documentation screen
 //! - `utils.rs` - Shared utility functions
 
+use crate::config::{TriggerConfig, WorkflowConfig};
 use crate::engine::{Engine, SharedRuns, WorkflowRun};
-use crate::config::{WorkflowConfig, TriggerConfig};
-use std::str::FromStr;
+use chrono::{DateTime, Utc};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -25,14 +25,14 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use chrono::{DateTime, Utc};
 
-mod workflows_view;
-mod logs_view;
 mod description_view;
 mod help_view;
+mod logs_view;
 pub mod utils;
+mod workflows_view;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -41,7 +41,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum LogLevel {
     Info,
     Error,
@@ -88,7 +88,12 @@ pub enum FocusedPanel {
 }
 
 impl App {
-    pub fn new(runs: SharedRuns, workflows_dir: String, engine: Arc<Engine>, logs: SharedLogs) -> Self {
+    pub fn new(
+        runs: SharedRuns,
+        workflows_dir: String,
+        engine: Arc<Engine>,
+        logs: SharedLogs,
+    ) -> Self {
         Self {
             runs,
             selected_workflow: 0,
@@ -113,147 +118,167 @@ impl App {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
-            // Block until user input, no automatic refresh
-            if let Ok(event) = event::read() {
-                if let Event::Key(key) = event {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('r') => {
-                            // Manual refresh - just continue the loop to redraw
-                            continue;
-                        }
-                        KeyCode::Char('l') => {
-                            // Go to logs view only from workflows
-                            if self.current_view == AppView::Workflows {
-                                self.current_view = AppView::Logs;
-                                self.detail_scroll = 0;
-                                self.log_scroll = 0;
-                            }
-                        }
-                        KeyCode::Char('w') => {
-                            // Go to workflows view from any view
-                            if self.current_view != AppView::Workflows {
-                                self.current_view = AppView::Workflows;
-                                self.detail_scroll = 0;
-                                self.log_scroll = 0;
-                            }
-                        }
-                        KeyCode::Char('?') => {
-                            // Show help screen
-                            self.current_view = AppView::Help;
-                            self.detail_scroll = 0;
-                        }
-                        KeyCode::Char('d') => {
-                            // Show description of currently selected workflow
-                            if self.current_view == AppView::Workflows {
-                                self.current_view = AppView::Description;
-                                self.detail_scroll = 0;
-                            }
-                        }
-                        KeyCode::Char('t') => {
-                            if self.current_view == AppView::Workflows {
-                                self.trigger_workflows();
-                            }
-                        }
-                        KeyCode::Char(' ') | KeyCode::Enter => {
-                            if self.focused_panel == FocusedPanel::Workflows {
-                                self.toggle_workflow_enabled();
-                            }
-                        }
-                        KeyCode::Tab | KeyCode::Right => {
-                            // Switch focus between panels (Tab and Right arrow)
-                            self.focused_panel = match self.focused_panel {
-                                FocusedPanel::Workflows => FocusedPanel::Runs,
-                                FocusedPanel::Runs => FocusedPanel::NodeResults,
-                                FocusedPanel::NodeResults => FocusedPanel::Workflows,
-                            };
-                            self.detail_scroll = 0; // Reset scroll when switching focus
-                        }
-                        KeyCode::Left => {
-                            // Switch focus between panels in reverse (Left arrow)
-                            self.focused_panel = match self.focused_panel {
-                                FocusedPanel::Workflows => FocusedPanel::NodeResults,
-                                FocusedPanel::Runs => FocusedPanel::Workflows,
-                                FocusedPanel::NodeResults => FocusedPanel::Runs,
-                            };
-                            self.detail_scroll = 0; // Reset scroll when switching focus
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if self.current_view == AppView::Logs {
-                                self.log_scroll = self.log_scroll.saturating_add(1);
-                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
-                                self.detail_scroll = self.detail_scroll.saturating_add(1);
-                            } else {
-                                match self.focused_panel {
-                                    FocusedPanel::Workflows => {
-                                        let workflows = self.get_unique_workflows();
-                                        if self.selected_workflow + 1 < workflows.len() && !workflows.is_empty() {
-                                            self.selected_workflow += 1;
-                                            self.selected_run = 0; // Reset run selection
-                                            self.detail_scroll = 0;
-                                        }
-                                    }
-                                    FocusedPanel::Runs => {
-                                        let runs = self.get_runs_and_scheduled_for_selected_workflow();
-                                        if self.selected_run + 1 < runs.len() && !runs.is_empty() {
-                                            self.selected_run += 1;
-                                            self.detail_scroll = 0;
-                                        }
-                                    }
-                                    FocusedPanel::NodeResults => {
-                                        self.detail_scroll = self.detail_scroll.saturating_add(3);
+            // Poll for events with timeout to enable automatic refresh
+            if let Ok(available) = crossterm::event::poll(std::time::Duration::from_millis(500)) {
+                if available {
+                    if let Ok(event) = event::read() {
+                        if let Event::Key(key) = event {
+                            match key.code {
+                                KeyCode::Char('q') => break,
+                                KeyCode::Char('r') => {
+                                    // Manual refresh - just continue the loop to redraw
+                                    continue;
+                                }
+                                KeyCode::Char('l') => {
+                                    // Go to logs view only from workflows
+                                    if self.current_view == AppView::Workflows {
+                                        self.current_view = AppView::Logs;
+                                        self.detail_scroll = 0;
+                                        self.log_scroll = 0;
                                     }
                                 }
-                            }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if self.current_view == AppView::Logs {
-                                self.log_scroll = self.log_scroll.saturating_sub(1);
-                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
-                                self.detail_scroll = self.detail_scroll.saturating_sub(1);
-                            } else {
-                                match self.focused_panel {
-                                    FocusedPanel::Workflows => {
-                                        if self.selected_workflow > 0 {
-                                            self.selected_workflow -= 1;
-                                            self.selected_run = 0; // Reset run selection
-                                            self.detail_scroll = 0;
-                                        }
-                                    }
-                                    FocusedPanel::Runs => {
-                                        if self.selected_run > 0 {
-                                            self.selected_run -= 1;
-                                            self.detail_scroll = 0;
-                                        }
-                                    }
-                                    FocusedPanel::NodeResults => {
-                                        self.detail_scroll = self.detail_scroll.saturating_sub(3);
+                                KeyCode::Char('w') => {
+                                    // Go to workflows view from any view
+                                    if self.current_view != AppView::Workflows {
+                                        self.current_view = AppView::Workflows;
+                                        self.detail_scroll = 0;
+                                        self.log_scroll = 0;
                                     }
                                 }
+                                KeyCode::Char('?') => {
+                                    // Show help screen
+                                    self.current_view = AppView::Help;
+                                    self.detail_scroll = 0;
+                                }
+                                KeyCode::Char('d') => {
+                                    // Show description of currently selected workflow
+                                    if self.current_view == AppView::Workflows {
+                                        self.current_view = AppView::Description;
+                                        self.detail_scroll = 0;
+                                    }
+                                }
+                                KeyCode::Char('t') => {
+                                    if self.current_view == AppView::Workflows {
+                                        self.trigger_workflows();
+                                    }
+                                }
+                                KeyCode::Char(' ') | KeyCode::Enter => {
+                                    if self.focused_panel == FocusedPanel::Workflows {
+                                        self.toggle_workflow_enabled();
+                                    }
+                                }
+                                KeyCode::Tab | KeyCode::Right => {
+                                    // Switch focus between panels (Tab and Right arrow)
+                                    self.focused_panel = match self.focused_panel {
+                                        FocusedPanel::Workflows => FocusedPanel::Runs,
+                                        FocusedPanel::Runs => FocusedPanel::NodeResults,
+                                        FocusedPanel::NodeResults => FocusedPanel::Workflows,
+                                    };
+                                    self.detail_scroll = 0; // Reset scroll when switching focus
+                                }
+                                KeyCode::Left => {
+                                    // Switch focus between panels in reverse (Left arrow)
+                                    self.focused_panel = match self.focused_panel {
+                                        FocusedPanel::Workflows => FocusedPanel::NodeResults,
+                                        FocusedPanel::Runs => FocusedPanel::Workflows,
+                                        FocusedPanel::NodeResults => FocusedPanel::Runs,
+                                    };
+                                    self.detail_scroll = 0; // Reset scroll when switching focus
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if self.current_view == AppView::Logs {
+                                        self.log_scroll = self.log_scroll.saturating_add(1);
+                                    } else if self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = self.detail_scroll.saturating_add(1);
+                                    } else {
+                                        match self.focused_panel {
+                                            FocusedPanel::Workflows => {
+                                                let workflows = self.get_unique_workflows();
+                                                if self.selected_workflow + 1 < workflows.len()
+                                                    && !workflows.is_empty()
+                                                {
+                                                    self.selected_workflow += 1;
+                                                    self.selected_run = 0; // Reset run selection
+                                                    self.detail_scroll = 0;
+                                                }
+                                            }
+                                            FocusedPanel::Runs => {
+                                                let runs = self
+                                                    .get_runs_and_scheduled_for_selected_workflow();
+                                                if self.selected_run + 1 < runs.len()
+                                                    && !runs.is_empty()
+                                                {
+                                                    self.selected_run += 1;
+                                                    self.detail_scroll = 0;
+                                                }
+                                            }
+                                            FocusedPanel::NodeResults => {
+                                                self.detail_scroll =
+                                                    self.detail_scroll.saturating_add(3);
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    if self.current_view == AppView::Logs {
+                                        self.log_scroll = self.log_scroll.saturating_sub(1);
+                                    } else if self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                                    } else {
+                                        match self.focused_panel {
+                                            FocusedPanel::Workflows => {
+                                                if self.selected_workflow > 0 {
+                                                    self.selected_workflow -= 1;
+                                                    self.selected_run = 0; // Reset run selection
+                                                    self.detail_scroll = 0;
+                                                }
+                                            }
+                                            FocusedPanel::Runs => {
+                                                if self.selected_run > 0 {
+                                                    self.selected_run -= 1;
+                                                    self.detail_scroll = 0;
+                                                }
+                                            }
+                                            FocusedPanel::NodeResults => {
+                                                self.detail_scroll =
+                                                    self.detail_scroll.saturating_sub(3);
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    if self.current_view == AppView::Logs {
+                                        self.log_scroll = self.log_scroll.saturating_add(10);
+                                    } else if self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = self.detail_scroll.saturating_add(10);
+                                    } else if self.focused_panel == FocusedPanel::NodeResults {
+                                        self.detail_scroll = self.detail_scroll.saturating_add(10);
+                                    }
+                                }
+                                KeyCode::PageUp => {
+                                    if self.current_view == AppView::Logs {
+                                        self.log_scroll = self.log_scroll.saturating_sub(10);
+                                    } else if self.current_view == AppView::Description
+                                        || self.current_view == AppView::Help
+                                    {
+                                        self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                                    } else if self.focused_panel == FocusedPanel::NodeResults {
+                                        self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                        KeyCode::PageDown => {
-                            if self.current_view == AppView::Logs {
-                                self.log_scroll = self.log_scroll.saturating_add(10);
-                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
-                                self.detail_scroll = self.detail_scroll.saturating_add(10);
-                            } else if self.focused_panel == FocusedPanel::NodeResults {
-                                self.detail_scroll = self.detail_scroll.saturating_add(10);
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            if self.current_view == AppView::Logs {
-                                self.log_scroll = self.log_scroll.saturating_sub(10);
-                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
-                                self.detail_scroll = self.detail_scroll.saturating_sub(10);
-                            } else if self.focused_panel == FocusedPanel::NodeResults {
-                                self.detail_scroll = self.detail_scroll.saturating_sub(10);
-                            }
-                        }
-                        _ => {}
                     }
                 }
             }
+            // Continue loop to refresh UI even when no events (every 500ms)
         }
 
         disable_raw_mode()?;
@@ -263,10 +288,8 @@ impl App {
 
     fn draw(&self, f: &mut ratatui::Frame) {
         // Add error handling for the layout
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.draw_layout(f)
-        }));
-        
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.draw_layout(f)));
+
         if result.is_err() {
             // Fallback simple display on error
             let error_text = vec![
@@ -297,7 +320,9 @@ impl App {
             message,
         };
         if let Ok(mut logs) = self.logs.try_lock() {
-            let workflow_logs = logs.entry(workflow_name.to_string()).or_insert_with(Vec::new);
+            let workflow_logs = logs
+                .entry(workflow_name.to_string())
+                .or_insert_with(Vec::new);
             workflow_logs.push(entry);
             // Keep only the last 1000 log entries per workflow
             if workflow_logs.len() > 1000 {
@@ -314,7 +339,9 @@ impl App {
             message,
         };
         if let Ok(mut logs) = self.logs.try_lock() {
-            let workflow_logs = logs.entry(workflow_name.to_string()).or_insert_with(Vec::new);
+            let workflow_logs = logs
+                .entry(workflow_name.to_string())
+                .or_insert_with(Vec::new);
             workflow_logs.push(entry);
             if workflow_logs.len() > 1000 {
                 let excess = workflow_logs.len() - 1000;
@@ -330,7 +357,9 @@ impl App {
             message,
         };
         if let Ok(mut logs) = self.logs.try_lock() {
-            let workflow_logs = logs.entry(workflow_name.to_string()).or_insert_with(Vec::new);
+            let workflow_logs = logs
+                .entry(workflow_name.to_string())
+                .or_insert_with(Vec::new);
             workflow_logs.push(entry);
             if workflow_logs.len() > 1000 {
                 let excess = workflow_logs.len() - 1000;
@@ -340,22 +369,30 @@ impl App {
     }
 
     fn trigger_workflows(&self) {
-        if let Ok(workflows) = WorkflowConfig::load_all(&self.workflows_dir, Some(self.logs.clone())) {
+        if let Ok(workflows) =
+            WorkflowConfig::load_all(&self.workflows_dir, Some(self.logs.clone()))
+        {
             if workflows.is_empty() || self.selected_workflow >= workflows.len() {
                 self.log_info("System", "No workflow selected or available".to_string());
                 return;
             }
-            
+
             let selected_workflow = &workflows[self.selected_workflow];
-            
+
             if !selected_workflow.enabled {
-                self.log_info("System", format!("Workflow '{}' is disabled", selected_workflow.name));
+                self.log_info(
+                    "System",
+                    format!("Workflow '{}' is disabled", selected_workflow.name),
+                );
                 return;
             }
-            
+
             let workflow_name = selected_workflow.name.clone();
-            self.log_info(&workflow_name, format!("Manually triggered workflow: {}", workflow_name));
-            
+            self.log_info(
+                &workflow_name,
+                format!("Manually triggered workflow: {}", workflow_name),
+            );
+
             let wf = selected_workflow.clone();
             let engine_clone = self.engine.clone();
             let logs_clone = self.logs.clone();
@@ -365,39 +402,54 @@ impl App {
                         if let Ok(mut logs) = logs_clone.try_lock() {
                             match run.status {
                                 crate::engine::RunStatus::Success => {
-                                    let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                    let workflow_logs =
+                                        logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
                                     workflow_logs.push(crate::tui::LogEntry {
                                         timestamp: chrono::Utc::now(),
                                         level: crate::tui::LogLevel::Info,
-                                        message: format!("✓ Manual workflow completed successfully: {}", workflow_name),
+                                        message: format!(
+                                            "✓ Manual workflow completed successfully: {}",
+                                            workflow_name
+                                        ),
                                     });
-                                },
+                                }
                                 crate::engine::RunStatus::Failed => {
-                                    let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                    let workflow_logs =
+                                        logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
                                     workflow_logs.push(crate::tui::LogEntry {
                                         timestamp: chrono::Utc::now(),
                                         level: crate::tui::LogLevel::Error,
-                                        message: format!("✗ Manual workflow failed: {}", workflow_name),
+                                        message: format!(
+                                            "✗ Manual workflow failed: {}",
+                                            workflow_name
+                                        ),
                                     });
-                                },
+                                }
                                 _ => {}
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         if let Ok(mut logs) = logs_clone.try_lock() {
-                            let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                            let workflow_logs =
+                                logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
                             workflow_logs.push(crate::tui::LogEntry {
                                 timestamp: chrono::Utc::now(),
                                 level: crate::tui::LogLevel::Error,
-                                message: format!("✗ Error running manual workflow {}: {}", workflow_name, e),
+                                message: format!(
+                                    "✗ Error running manual workflow {}: {}",
+                                    workflow_name, e
+                                ),
                             });
                         }
                     }
                 }
             });
         } else {
-            self.log_info("System", "Failed to load workflows for triggering".to_string());
+            self.log_info(
+                "System",
+                "Failed to load workflows for triggering".to_string(),
+            );
         }
     }
 
@@ -410,7 +462,7 @@ impl App {
 
         let workflow_name = &workflows[self.selected_workflow].name;
         let current_enabled = workflows[self.selected_workflow].enabled;
-        
+
         // Find and toggle the workflow in the filesystem
         if let Ok(entries) = std::fs::read_dir(&self.workflows_dir) {
             for entry in entries.flatten() {
@@ -422,11 +474,21 @@ impl App {
                             workflow.toggle_enabled();
                             match workflow.save(path.to_str().unwrap_or("")) {
                                 Ok(_) => {
-                                    let new_state = if current_enabled { "disabled" } else { "enabled" };
-                                    self.log_info(workflow_name, format!("Workflow {} {}", workflow_name, new_state));
-                                },
+                                    let new_state = if current_enabled {
+                                        "disabled"
+                                    } else {
+                                        "enabled"
+                                    };
+                                    self.log_info(
+                                        workflow_name,
+                                        format!("Workflow {} {}", workflow_name, new_state),
+                                    );
+                                }
                                 Err(e) => {
-                                    self.log_error(workflow_name, format!("Failed to save workflow {}: {}", workflow_name, e));
+                                    self.log_error(
+                                        workflow_name,
+                                        format!("Failed to save workflow {}: {}", workflow_name, e),
+                                    );
                                 }
                             }
                             break;
@@ -435,24 +497,38 @@ impl App {
                 }
             }
         } else {
-            self.log_error("System", format!("Failed to access workflows directory: {}", self.workflows_dir));
+            self.log_error(
+                "System",
+                format!(
+                    "Failed to access workflows directory: {}",
+                    self.workflows_dir
+                ),
+            );
         }
     }
 
     fn get_unique_workflows(&self) -> Vec<WorkflowConfig> {
         let mut workflows: HashSet<String> = HashSet::new();
         let mut workflow_configs: Vec<WorkflowConfig> = vec![];
-        
+
         // Add workflows from existing runs
         let runs = self.runs.lock().unwrap();
         for run in runs.iter() {
             workflows.insert(run.workflow_name.clone());
         }
-        
+
         // Also add workflows from filesystem (even if not run yet)
-        if let Ok(configs) = WorkflowConfig::load_all(&self.workflows_dir, Some(self.logs.clone())) {
+        if let Ok(configs) = WorkflowConfig::load_all(&self.workflows_dir, Some(self.logs.clone()))
+        {
             if workflows.is_empty() && !configs.is_empty() {
-                self.log_info("System", format!("Loaded {} workflows from {}", configs.len(), self.workflows_dir));
+                self.log_info(
+                    "System",
+                    format!(
+                        "Loaded {} workflows from {}",
+                        configs.len(),
+                        self.workflows_dir
+                    ),
+                );
             }
             for config in configs {
                 if !workflows.contains(&config.name) {
@@ -461,7 +537,7 @@ impl App {
                 workflow_configs.push(config);
             }
         }
-        
+
         // Sort by name
         workflow_configs.sort_by(|a, b| a.name.cmp(&b.name));
         workflow_configs
@@ -469,14 +545,14 @@ impl App {
 
     fn get_runs_and_scheduled_for_selected_workflow(&self) -> Vec<RunOrScheduled> {
         let workflows = self.get_unique_workflows();
-        
+
         if workflows.is_empty() || self.selected_workflow >= workflows.len() {
             return vec![];
         }
-        
+
         let selected_workflow = &workflows[self.selected_workflow];
         let mut result = Vec::new();
-        
+
         // Add actual runs
         let runs = self.runs.lock().unwrap();
         for run in runs.iter() {
@@ -484,7 +560,7 @@ impl App {
                 result.push(RunOrScheduled::ActualRun(run.clone()));
             }
         }
-        
+
         // Add scheduled run for cron workflows
         for trigger in &selected_workflow.triggers {
             if let TriggerConfig::Cron { schedule } = trigger {
@@ -499,17 +575,23 @@ impl App {
                 }
             }
         }
-        
+
         // Sort: scheduled runs first, then actual runs by start time (newest first)
-        result.sort_by(|a, b| {
-            match (a, b) {
-                (RunOrScheduled::ScheduledRun { .. }, RunOrScheduled::ActualRun(_)) => std::cmp::Ordering::Less,
-                (RunOrScheduled::ActualRun(_), RunOrScheduled::ScheduledRun { .. }) => std::cmp::Ordering::Greater,
-                (RunOrScheduled::ActualRun(a), RunOrScheduled::ActualRun(b)) => b.started_at.cmp(&a.started_at),
-                (RunOrScheduled::ScheduledRun { .. }, RunOrScheduled::ScheduledRun { .. }) => std::cmp::Ordering::Equal,
+        result.sort_by(|a, b| match (a, b) {
+            (RunOrScheduled::ScheduledRun { .. }, RunOrScheduled::ActualRun(_)) => {
+                std::cmp::Ordering::Less
+            }
+            (RunOrScheduled::ActualRun(_), RunOrScheduled::ScheduledRun { .. }) => {
+                std::cmp::Ordering::Greater
+            }
+            (RunOrScheduled::ActualRun(a), RunOrScheduled::ActualRun(b)) => {
+                b.started_at.cmp(&a.started_at)
+            }
+            (RunOrScheduled::ScheduledRun { .. }, RunOrScheduled::ScheduledRun { .. }) => {
+                std::cmp::Ordering::Equal
             }
         });
-        
+
         result
     }
 }

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
-use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
@@ -36,7 +36,7 @@ pub struct NodeConfig {
     #[serde(default)]
     pub timeout: Option<String>,
     #[serde(default)]
-    pub depends_on: Vec<String>,  // Node IDs that this node depends on
+    pub depends_on: Vec<String>, // Node IDs that this node depends on
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,8 +85,8 @@ impl WorkflowConfig {
     }
 
     pub fn save(&self, path: &str) -> Result<()> {
-        let content = serde_yaml::to_string(self)
-            .context("Failed to serialize workflow to YAML")?;
+        let content =
+            serde_yaml::to_string(self).context("Failed to serialize workflow to YAML")?;
         fs::write(path, content)
             .with_context(|| format!("Could not write workflow file: {}", path))?;
         Ok(())
@@ -96,7 +96,10 @@ impl WorkflowConfig {
         self.enabled = !self.enabled;
     }
 
-    pub fn load_all(dir: &str, logs: Option<Arc<Mutex<HashMap<String, Vec<crate::tui::LogEntry>>>>>) -> Result<Vec<Self>> {
+    pub fn load_all(
+        dir: &str,
+        logs: Option<Arc<Mutex<HashMap<String, Vec<crate::tui::LogEntry>>>>>,
+    ) -> Result<Vec<Self>> {
         let mut workflows = vec![];
         let entries = fs::read_dir(dir).context("Could not read workflows directory")?;
 
@@ -112,11 +115,13 @@ impl WorkflowConfig {
                     }
                     Err(e) => {
                         let error_msg = format!("✗ Failed to load workflow {}: {}", path_str, e);
-                        
+
                         if let Some(logs_ref) = &logs {
                             // Log to the shared logs if available
                             if let Ok(mut logs_guard) = logs_ref.try_lock() {
-                                let workflow_logs = logs_guard.entry("System".to_string()).or_insert_with(Vec::new);
+                                let workflow_logs = logs_guard
+                                    .entry("System".to_string())
+                                    .or_insert_with(Vec::new);
                                 let entry = crate::tui::LogEntry {
                                     timestamp: Utc::now(),
                                     level: crate::tui::LogLevel::Error,

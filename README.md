@@ -204,7 +204,7 @@ flowt/
 
 ### Directory Configuration
 
-Flowt uses configurable directories for workflows and cache storage. You can customize these locations using environment variables or command-line arguments.
+Flowt uses configurable directories for workflows and internal storage. You can customize these locations using environment variables or command-line arguments.
 
 #### Environment Variables
 
@@ -220,7 +220,7 @@ Flowt supports the following environment variables for directory configuration:
 # Use default locations
 flowt
 
-# Set base directory (workflows in /my/flowt/workflows, cache in /my/flowt/.cache)
+# Set base directory
 export FLOWT_DIR="/my/flowt"
 flowt
 
@@ -291,6 +291,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Built with [Ratatui](https://github.com/ratatui-org/ratatui) for the terminal interface
 - Uses [Tokio](https://tokio.rs) for async runtime
 - CLI powered by [Clap](https://github.com/clap-rs/clap)
+- Storage powered by [PoloDb](https://github.com/polodb/polodb)
 
 ---
 

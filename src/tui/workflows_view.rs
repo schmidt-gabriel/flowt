@@ -231,8 +231,9 @@ impl App {
 
         // Bottom help bar - responsive based on terminal width
         let area = f.size();
-        
+
         // Define help items in order of priority (most important first)
+
         let help_items = if area.width >= 120 {
             // Full help bar for wide terminals
             vec![
@@ -258,22 +259,18 @@ impl App {
                 "| ? help ",
                 "| q quit ",
             ]
-        }  else {
+        } else {
             // Minimal help bar for very narrow terminals
-            vec![
-                " ↑/↓ ",
-                "| ←/→ ",
-                "| ? help ",
-                "| q quit ",
-            ]
+            vec![" ↑/↓ ", "| ←/→ ", "| ? help ", "| q quit "]
         };
-        
+
         let help = Paragraph::new(Line::from(
-            help_items.into_iter()
+            help_items
+                .into_iter()
                 .map(|text| Span::styled(text, Style::default().fg(Color::DarkGray)))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         ));
-        
+
         let help_area = Rect {
             x: 0,
             y: area.height.saturating_sub(1),

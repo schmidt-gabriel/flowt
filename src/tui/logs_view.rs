@@ -16,24 +16,29 @@ impl App {
 
         // Get the currently selected workflow name
         let workflows = self.get_unique_workflows();
-        let selected_workflow_name = if !workflows.is_empty() && self.selected_workflow < workflows.len() {
-            &workflows[self.selected_workflow].name
-        } else {
-            "System"
-        };
+        let selected_workflow_name =
+            if !workflows.is_empty() && self.selected_workflow < workflows.len() {
+                &workflows[self.selected_workflow].name
+            } else {
+                "System"
+            };
 
         // Main logs area - show only logs for selected workflow
         let logs = self.logs.lock().unwrap();
-        let workflow_logs = logs.get(selected_workflow_name).cloned().unwrap_or_default();
-        
+        let workflow_logs = logs
+            .get(selected_workflow_name)
+            .cloned()
+            .unwrap_or_default();
+
         let log_items: Vec<Line> = workflow_logs
             .iter()
             .map(|log| {
-                let timestamp = log.timestamp
+                let timestamp = log
+                    .timestamp
                     .with_timezone(&chrono::Local)
                     .format("%m/%d %H:%M:%S")
                     .to_string();
-                
+
                 let (icon, color) = match log.level {
                     LogLevel::Info => ("ℹ", Color::Blue),
                     LogLevel::Warning => ("⚠", Color::Yellow),
@@ -49,11 +54,10 @@ impl App {
             .collect();
 
         let logs_widget = Paragraph::new(log_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" Logs: {} (l to return to workflows) ", selected_workflow_name)),
-            )
+            .block(Block::default().borders(Borders::ALL).title(format!(
+                " Logs: {} (l to return to workflows) ",
+                selected_workflow_name
+            )))
             .scroll((self.log_scroll, 0));
 
         f.render_widget(logs_widget, chunks[0]);
@@ -61,7 +65,10 @@ impl App {
         // Bottom help bar for logs
         let help = Paragraph::new(Line::from(vec![
             Span::styled(" ↑/↓ scroll ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| PgUp/PgDn fast scroll ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "| PgUp/PgDn fast scroll ",
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("| w workflows ", Style::default().fg(Color::DarkGray)),
             Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
         ]));

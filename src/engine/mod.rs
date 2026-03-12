@@ -1,20 +1,12 @@
 use crate::config::{NodeConfig, NodeKind, WorkflowConfig};
+use crate::storage::StorageService;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use regex::Regex;
-
-fn default_cache_dir() -> String {
-    std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/.cache", dir))
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/.cache", home)
-        })
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeStatus {
@@ -79,12 +71,42 @@ impl Engine {
         }
     }
 
+    // Load historical runs from database on startup
+    pub fn load_history(&self) -> Result<()> {
+        if let Ok(history) = StorageService::new() {
+            if let Ok(recent_runs) = history.get_recent_workflow_runs(Some(50)) {
+                let mut runs = self.runs.lock().unwrap();
+                *runs = recent_runs;
+            }
+        }
+        Ok(())
+    }
+
+    // Save a workflow run to persistent storage
+    pub fn save_run(&self, run: &WorkflowRun) -> Result<()> {
+        if let Ok(history) = StorageService::new() {
+            history.save_workflow_run(run)?
+        }
+        Ok(())
+    }
+
+    // Update a workflow run in persistent storage
+    pub fn update_run(&self, run: &WorkflowRun) -> Result<()> {
+        if let Ok(history) = StorageService::new() {
+            history.update_workflow_run(run)?
+        }
+        Ok(())
+    }
+
     pub async fn run_workflow(&self, workflow: &WorkflowConfig) -> Result<WorkflowRun> {
         let mut run = WorkflowRun::new(&workflow.name);
 
+        // Save initial run to database
+        let _ = self.save_run(&run);
+
         {
             let mut runs = self.runs.lock().unwrap();
-            runs.push(run.clone());
+            runs.insert(0, run.clone()); // Insert at the beginning for newest first
         }
 
         let mut context: HashMap<String, NodeResult> = HashMap::new();
@@ -92,12 +114,12 @@ impl Engine {
 
         for node_id in execution_order {
             let node = workflow.nodes.iter().find(|n| n.id == node_id).unwrap();
-            
+
             // Check if all dependencies are satisfied and successful
             let dependencies_satisfied = node.depends_on.iter().all(|dep_id| {
-                context.get(dep_id).map_or(false, |result| {
-                    matches!(result.status, NodeStatus::Success)
-                })
+                context
+                    .get(dep_id)
+                    .map_or(false, |result| matches!(result.status, NodeStatus::Success))
             });
 
             let result = if dependencies_satisfied || node.depends_on.is_empty() {
@@ -116,14 +138,19 @@ impl Engine {
 
             context.insert(node.id.clone(), result.clone());
 
+            // Update run with node result
+            run.node_results.push(result.clone());
+
+            // Update in-memory runs
             {
                 let mut runs = self.runs.lock().unwrap();
                 if let Some(r) = runs.iter_mut().find(|r| r.id == run.id) {
-                    r.node_results.push(result.clone());
+                    r.node_results = run.node_results.clone();
                 }
             }
 
-            run.node_results.push(result.clone());
+            // Persist updated run to database
+            let _ = self.update_run(&run);
 
             if matches!(result.status, NodeStatus::Failed(_)) {
                 run.status = RunStatus::Failed;
@@ -137,6 +164,8 @@ impl Engine {
 
         run.finished_at = Some(Utc::now());
 
+        // Final update to database and in-memory
+        let _ = self.update_run(&run);
         {
             let mut runs = self.runs.lock().unwrap();
             if let Some(r) = runs.iter_mut().find(|r| r.id == run.id) {
@@ -153,11 +182,10 @@ impl Engine {
         let mut visited = std::collections::HashSet::new();
         let mut temp_visited = std::collections::HashSet::new();
         let mut result = Vec::new();
-        
+
         // Create a map for quick node lookup
-        let node_map: HashMap<String, &NodeConfig> = nodes.iter()
-            .map(|n| (n.id.clone(), n))
-            .collect();
+        let node_map: HashMap<String, &NodeConfig> =
+            nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
         // Recursive DFS for topological sort
         fn visit(
@@ -168,7 +196,10 @@ impl Engine {
             result: &mut Vec<String>,
         ) -> Result<()> {
             if temp_visited.contains(node_id) {
-                return Err(anyhow::anyhow!("Circular dependency detected involving node: {}", node_id));
+                return Err(anyhow::anyhow!(
+                    "Circular dependency detected involving node: {}",
+                    node_id
+                ));
             }
             if visited.contains(node_id) {
                 return Ok(());
@@ -192,7 +223,13 @@ impl Engine {
         // Visit all nodes
         for node in nodes {
             if !visited.contains(&node.id) {
-                visit(&node.id, &node_map, &mut visited, &mut temp_visited, &mut result)?;
+                visit(
+                    &node.id,
+                    &node_map,
+                    &mut visited,
+                    &mut temp_visited,
+                    &mut result,
+                )?;
             }
         }
 
@@ -208,11 +245,25 @@ impl Engine {
         let started_at = Utc::now();
 
         let (status, output, response_data) = match &node.kind {
-            NodeKind::Http { url, method, expect_status, headers, body } => {
+            NodeKind::Http {
+                url,
+                method,
+                expect_status,
+                headers,
+                body,
+            } => {
                 let interpolated_url = interpolate_template(url, context);
                 let interpolated_headers = interpolate_headers(headers, context);
                 let interpolated_body = body.as_ref().map(|b| interpolate_template(b, context));
-                run_http(&interpolated_url, method, *expect_status, &interpolated_headers, interpolated_body.as_deref(), run_id).await
+                run_http(
+                    &interpolated_url,
+                    method,
+                    *expect_status,
+                    &interpolated_headers,
+                    interpolated_body.as_deref(),
+                    run_id,
+                )
+                .await
             }
             NodeKind::Shell { cmd, env } => {
                 let interpolated_cmd = interpolate_template(cmd, context);
@@ -220,7 +271,10 @@ impl Engine {
                 let (status, output) = run_shell(&interpolated_cmd, &interpolated_env).await;
                 (status, output, None)
             }
-            NodeKind::Slack { webhook_url, message } => {
+            NodeKind::Slack {
+                webhook_url,
+                message,
+            } => {
                 let interpolated_url = interpolate_template(webhook_url, context);
                 let interpolated_message = interpolate_template(message, context);
                 let (status, output) = run_slack(&interpolated_url, &interpolated_message).await;
@@ -249,45 +303,84 @@ async fn run_http(
     expect_status: Option<u16>,
     headers: &HashMap<String, String>,
     body: Option<&str>,
-    run_id: &str,
+    _run_id: &str,
 ) -> (NodeStatus, String, Option<Value>) {
     let expected = expect_status.unwrap_or(200);
-    let cache_dir = default_cache_dir();
-    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-        return (
-            NodeStatus::Failed(format!("Failed to create cache directory: {}", e)),
-            String::new(),
-            None,
-        );
+
+    // Try to get cached response first
+    if let Ok(history) = StorageService::new() {
+        if let Ok(Some((cached_data, cached_status))) =
+            history.get_cached_api_response(url, method, headers, body)
+        {
+            if cached_status == expected {
+                let response_data = serde_json::from_str(&cached_data).ok();
+                return (
+                    NodeStatus::Success,
+                    format!("HTTP {} (cached)", cached_status),
+                    response_data,
+                );
+            } else {
+                return (
+                    NodeStatus::Failed(format!(
+                        "Expected {}, got {} (cached)",
+                        expected, cached_status
+                    )),
+                    format!("HTTP {} (cached)", cached_status),
+                    None,
+                );
+            }
+        }
     }
 
-    let cache_file = format!("{}/flowt_{}", cache_dir, run_id);
-    
-    let mut cmd = format!("curl -s -o '{}' -w '%{{http_code}}' -X {}", cache_file, method.to_uppercase());
-    
+    // Build curl command to capture response
+    let mut cmd = format!("curl -s -w '\n%{{http_code}}' -X {}", method.to_uppercase());
+
     // Add headers
     for (key, value) in headers {
         cmd.push_str(&format!(" -H '{}: {}'", key, value));
     }
-    
+
     // Add body if provided
     if let Some(body_content) = body {
         cmd.push_str(&format!(" -d '{}'", body_content.replace("'", "'\"'\"'")));
     }
-    
+
     cmd.push_str(&format!(" '{}'", url));
 
     match run_shell(&cmd, &HashMap::new()).await {
         (NodeStatus::Success, output) => {
-            let status_code: u16 = output.trim().parse().unwrap_or(0);
+            // Split output into response body and status code
+            let parts: Vec<&str> = output.rsplitn(2, '\n').collect();
+            let (response_body, status_str) = if parts.len() == 2 {
+                (parts[1], parts[0])
+            } else {
+                ("", output.trim())
+            };
+
+            let status_code: u16 = status_str.trim().parse().unwrap_or(0);
             let out = format!("HTTP {}", status_code);
+
+            // Cache the response using PoloDB (with 1 hour TTL)
+            if let Ok(history) = StorageService::new() {
+                let _ = history.save_api_response(
+                    url,
+                    method,
+                    headers,
+                    body,
+                    response_body,
+                    status_code,
+                    Some(60), // 1 hour TTL
+                );
+            }
 
             if status_code == expected {
                 // Try to parse JSON response
-                let response_data = std::fs::read_to_string(&cache_file)
-                    .ok()
-                    .and_then(|content| serde_json::from_str(&content).ok());
-                
+                let response_data = if response_body.trim().is_empty() {
+                    None
+                } else {
+                    serde_json::from_str(response_body).ok()
+                };
+
                 (NodeStatus::Success, out, response_data)
             } else {
                 (
@@ -317,10 +410,7 @@ async fn run_shell(cmd: &str, env: &HashMap<String, String>) -> (NodeStatus, Str
             if out.status.success() {
                 (NodeStatus::Success, output)
             } else {
-                (
-                    NodeStatus::Failed(format!("Exit {}", out.status)),
-                    output,
-                )
+                (NodeStatus::Failed(format!("Exit {}", out.status)), output)
             }
         }
         Err(e) => (NodeStatus::Failed(e.to_string()), String::new()),
@@ -339,20 +429,20 @@ async fn run_slack(webhook_url: &str, message: &str) -> (NodeStatus, String) {
 // Template interpolation functions
 fn interpolate_template(template: &str, context: &HashMap<String, NodeResult>) -> String {
     let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
-    
+
     re.replace_all(template, |caps: &regex::Captures| {
         let var_path = &caps[1];
-        
+
         // Handle environment variables
         if !var_path.starts_with("steps.") {
             return std::env::var(var_path).unwrap_or_else(|_| format!("${{{}}}", var_path));
         }
-        
+
         // Handle step references: steps.step-id.response.field
         let parts: Vec<&str> = var_path.split('.').collect();
         if parts.len() >= 3 && parts[0] == "steps" {
             let step_id = parts[1];
-            
+
             if let Some(node_result) = context.get(step_id) {
                 if parts[2] == "response" && parts.len() >= 4 {
                     // Access response data field
@@ -369,18 +459,26 @@ fn interpolate_template(template: &str, context: &HashMap<String, NodeResult>) -
                 }
             }
         }
-        
+
         format!("${{{}}}", var_path)
-    }).to_string()
+    })
+    .to_string()
 }
 
-fn interpolate_headers(headers: &HashMap<String, String>, context: &HashMap<String, NodeResult>) -> HashMap<String, String> {
-    headers.iter()
+fn interpolate_headers(
+    headers: &HashMap<String, String>,
+    context: &HashMap<String, NodeResult>,
+) -> HashMap<String, String> {
+    headers
+        .iter()
         .map(|(k, v)| (k.clone(), interpolate_template(v, context)))
         .collect()
 }
 
-fn interpolate_env(env: &HashMap<String, String>, context: &HashMap<String, NodeResult>) -> HashMap<String, String> {
+fn interpolate_env(
+    env: &HashMap<String, String>,
+    context: &HashMap<String, NodeResult>,
+) -> HashMap<String, String> {
     env.iter()
         .map(|(k, v)| (k.clone(), interpolate_template(v, context)))
         .collect()
@@ -388,7 +486,7 @@ fn interpolate_env(env: &HashMap<String, String>, context: &HashMap<String, Node
 
 fn get_nested_value(value: &Value, path: &[&str]) -> Option<Value> {
     let mut current = value;
-    
+
     for &key in path {
         match current {
             Value::Object(obj) => {
@@ -404,7 +502,7 @@ fn get_nested_value(value: &Value, path: &[&str]) -> Option<Value> {
             _ => return None,
         }
     }
-    
+
     Some(current.clone())
 }
 

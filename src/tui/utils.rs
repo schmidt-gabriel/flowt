@@ -1,4 +1,4 @@
-use crate::engine::{WorkflowRun, NodeStatus};
+use crate::engine::{NodeStatus, WorkflowRun};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -9,7 +9,12 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
 
     lines.push(Line::from(vec![
         Span::styled("Workflow: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(run.workflow_name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            run.workflow_name.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]));
 
     lines.push(Line::from(vec![
@@ -26,19 +31,24 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
     ]));
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Execution Graph:", Style::default().fg(Color::DarkGray))));
+    lines.push(Line::from(Span::styled(
+        "Execution Graph:",
+        Style::default().fg(Color::DarkGray),
+    )));
     lines.push(Line::from(""));
 
     // Draw the execution graph showing flow between nodes in order
     for (index, result) in run.node_results.iter().enumerate() {
         // Add connector line for execution flow (except for first node)
         if index > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("      │", Style::default().fg(Color::DarkGray)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("      ↓", Style::default().fg(Color::DarkGray)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "      │",
+                Style::default().fg(Color::DarkGray),
+            )]));
+            lines.push(Line::from(vec![Span::styled(
+                "      ↓",
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
 
         let (icon, color) = match &result.status {
@@ -57,7 +67,12 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
             Span::styled(order_num, Style::default().fg(Color::Cyan)),
             Span::styled(" ", Style::default()),
             Span::styled(format!("{} ", icon), Style::default().fg(color)),
-            Span::styled(result.node_id.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                result.node_id.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
 
         // Show execution timing if available
@@ -66,7 +81,10 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
             let duration_ms = duration.num_milliseconds();
             lines.push(Line::from(vec![
                 Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("Duration: {}ms", duration_ms), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("Duration: {}ms", duration_ms),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
 
@@ -77,13 +95,16 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
                     Span::styled(" │  ├─ ", Style::default().fg(Color::Yellow)),
                     Span::styled("Status: Running...", Style::default().fg(Color::Yellow)),
                 ]));
-            },
+            }
             NodeStatus::Skipped => {
                 lines.push(Line::from(vec![
                     Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("Skipped: Dependencies not met", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "Skipped: Dependencies not met",
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
-            },
+            }
             _ => {}
         }
 
@@ -118,20 +139,37 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
                 Span::styled(format!("Error: {}", err), Style::default().fg(Color::Red)),
             ]));
         } else {
-            lines.push(Line::from(vec![
-                Span::styled(" │", Style::default().fg(Color::DarkGray)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                " │",
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
     }
 
     // Add summary at the bottom
     if !run.node_results.is_empty() {
         let total_nodes = run.node_results.len();
-        let completed_nodes = run.node_results.iter().filter(|r| !matches!(r.status, NodeStatus::Pending | NodeStatus::Running)).count();
-        let successful_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Success)).count();
-        let failed_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Failed(_))).count();
-        let skipped_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Skipped)).count();
-        
+        let completed_nodes = run
+            .node_results
+            .iter()
+            .filter(|r| !matches!(r.status, NodeStatus::Pending | NodeStatus::Running))
+            .count();
+        let successful_nodes = run
+            .node_results
+            .iter()
+            .filter(|r| matches!(r.status, NodeStatus::Success))
+            .count();
+        let failed_nodes = run
+            .node_results
+            .iter()
+            .filter(|r| matches!(r.status, NodeStatus::Failed(_)))
+            .count();
+        let skipped_nodes = run
+            .node_results
+            .iter()
+            .filter(|r| matches!(r.status, NodeStatus::Skipped))
+            .count();
+
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled(" └─ ", Style::default().fg(Color::DarkGray)),
@@ -139,13 +177,25 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
         ]));
         lines.push(Line::from(vec![
             Span::styled("    Progress: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}/{} nodes completed", completed_nodes, total_nodes), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{}/{} nodes completed", completed_nodes, total_nodes),
+                Style::default().fg(Color::White),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::styled("    Results:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ✔", successful_nodes), Style::default().fg(Color::Green)),
-            Span::styled(format!(" · {} ✘", failed_nodes), Style::default().fg(Color::Red)),
-            Span::styled(format!(" · {} -", skipped_nodes), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ✔", successful_nodes),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                format!(" · {} ✘", failed_nodes),
+                Style::default().fg(Color::Red),
+            ),
+            Span::styled(
+                format!(" · {} -", skipped_nodes),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
     }
 
@@ -154,16 +204,16 @@ pub fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
 
 pub fn format_duration(duration: chrono::Duration) -> String {
     let total_seconds = duration.num_seconds();
-    
+
     if total_seconds < 0 {
         return "overdue".to_string();
     }
-    
+
     let days = total_seconds / 86400;
     let hours = (total_seconds % 86400) / 3600;
     let minutes = (total_seconds % 3600) / 60;
     let seconds = total_seconds % 60;
-    
+
     if days > 0 {
         format!("{}d {}h {}m", days, hours, minutes)
     } else if hours > 0 {
