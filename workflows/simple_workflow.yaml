@@ -1,13 +1,14 @@
-name: Simple Test
-description: Manual test workflow
+name: Manual Workflow
+description: Manual workflow
 enabled: true
 triggers:
   - type: manual
 
 nodes:
-  - id: test-step
+  - id: my-system
     type: shell
-    cmd: echo "Simple test completed"
+    cmd: echo "Running on $(uname -s) with $(uname -r)"
     env: {}
-    depends_on: []
-
+    when: null
+    retry: null
+    timeout: null

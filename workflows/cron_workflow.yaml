@@ -1,4 +1,4 @@
-name: Hello Workflow
+name: Cron Workflow
 description: Simple scheduled workflow  
 enabled: true
 triggers:
@@ -10,4 +10,12 @@ nodes:
     type: shell
     cmd: echo "Hello from scheduled workflow at $(date)"
     env: {}
-    depends_on: []
+
+  - id: http-step
+    type: http
+    url: "https://jsonplaceholder.typicode.com/todos/1"
+    method: GET
+    expect_status: 200
+    retry: 3
+    timeout: "30s"
+    depends_on: ["hello-step"]

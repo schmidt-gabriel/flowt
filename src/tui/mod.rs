@@ -1,4 +1,15 @@
-use crate::engine::{Engine, NodeStatus, RunStatus, SharedRuns, WorkflowRun};
+//! Terminal User Interface (TUI) module for the flowt workflow automation tool.
+//! 
+//! This module implements a terminal-based interface for managing and monitoring workflows.
+//! The TUI is organized into separate view modules:
+//! 
+//! - `workflows_view.rs` - Main workflow management screen
+//! - `logs_view.rs` - Logs display screen 
+//! - `description_view.rs` - Workflow description screen
+//! - `help_view.rs` - Help documentation screen
+//! - `utils.rs` - Shared utility functions
+
+use crate::engine::{Engine, SharedRuns, WorkflowRun};
 use crate::config::{WorkflowConfig, TriggerConfig};
 use std::str::FromStr;
 use crossterm::{
@@ -8,16 +19,20 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    text::Line,
+    widgets::{Block, Borders, Paragraph},
     Terminal,
 };
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
+
+mod workflows_view;
+mod logs_view;
+mod description_view;
+mod help_view;
+pub mod utils;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -61,6 +76,8 @@ pub struct App {
 pub enum AppView {
     Workflows,
     Logs,
+    Description,
+    Help,
 }
 
 #[derive(PartialEq)]
@@ -106,13 +123,32 @@ impl App {
                             continue;
                         }
                         KeyCode::Char('l') => {
-                            // Toggle between workflows and logs view
-                            self.current_view = match self.current_view {
-                                AppView::Workflows => AppView::Logs,
-                                AppView::Logs => AppView::Workflows,
-                            };
+                            // Go to logs view only from workflows
+                            if self.current_view == AppView::Workflows {
+                                self.current_view = AppView::Logs;
+                                self.detail_scroll = 0;
+                                self.log_scroll = 0;
+                            }
+                        }
+                        KeyCode::Char('w') => {
+                            // Go to workflows view from any view
+                            if self.current_view != AppView::Workflows {
+                                self.current_view = AppView::Workflows;
+                                self.detail_scroll = 0;
+                                self.log_scroll = 0;
+                            }
+                        }
+                        KeyCode::Char('?') => {
+                            // Show help screen
+                            self.current_view = AppView::Help;
                             self.detail_scroll = 0;
-                            self.log_scroll = 0;
+                        }
+                        KeyCode::Char('d') => {
+                            // Show description of currently selected workflow
+                            if self.current_view == AppView::Workflows {
+                                self.current_view = AppView::Description;
+                                self.detail_scroll = 0;
+                            }
                         }
                         KeyCode::Char('t') => {
                             if self.current_view == AppView::Workflows {
@@ -136,6 +172,8 @@ impl App {
                         KeyCode::Down | KeyCode::Char('j') => {
                             if self.current_view == AppView::Logs {
                                 self.log_scroll = self.log_scroll.saturating_add(1);
+                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
+                                self.detail_scroll = self.detail_scroll.saturating_add(1);
                             } else {
                                 match self.focused_panel {
                                     FocusedPanel::Workflows => {
@@ -162,6 +200,8 @@ impl App {
                         KeyCode::Up | KeyCode::Char('k') => {
                             if self.current_view == AppView::Logs {
                                 self.log_scroll = self.log_scroll.saturating_sub(1);
+                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
+                                self.detail_scroll = self.detail_scroll.saturating_sub(1);
                             } else {
                                 match self.focused_panel {
                                     FocusedPanel::Workflows => {
@@ -186,6 +226,8 @@ impl App {
                         KeyCode::PageDown => {
                             if self.current_view == AppView::Logs {
                                 self.log_scroll = self.log_scroll.saturating_add(10);
+                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
+                                self.detail_scroll = self.detail_scroll.saturating_add(10);
                             } else if self.focused_panel == FocusedPanel::NodeResults {
                                 self.detail_scroll = self.detail_scroll.saturating_add(10);
                             }
@@ -193,6 +235,8 @@ impl App {
                         KeyCode::PageUp => {
                             if self.current_view == AppView::Logs {
                                 self.log_scroll = self.log_scroll.saturating_sub(10);
+                            } else if self.current_view == AppView::Description || self.current_view == AppView::Help {
+                                self.detail_scroll = self.detail_scroll.saturating_sub(10);
                             } else if self.focused_panel == FocusedPanel::NodeResults {
                                 self.detail_scroll = self.detail_scroll.saturating_sub(10);
                             }
@@ -232,295 +276,9 @@ impl App {
         match self.current_view {
             AppView::Workflows => self.draw_workflows_view(f),
             AppView::Logs => self.draw_logs_view(f),
+            AppView::Description => self.draw_description_view(f),
+            AppView::Help => self.draw_help_view(f),
         }
-    }
-
-    fn draw_workflows_view(&self, f: &mut ratatui::Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(25), Constraint::Percentage(35), Constraint::Percentage(40)])
-            .split(f.size());
-
-        // First panel: unique workflow names
-        let workflows = self.get_unique_workflows();
-        let workflow_items: Vec<ListItem> = workflows
-            .iter()
-            .map(|config| {
-                let trigger_type = if !config.triggers.is_empty() {
-                    match &config.triggers[0] {
-                        TriggerConfig::Manual => "manual",
-                        TriggerConfig::Cron { .. } => "cron",
-                        TriggerConfig::Webhook { .. } => "webhook",
-                    }
-                } else {
-                    "none"
-                };
-                
-                let status_icon = if config.enabled { "●" } else { "○" };
-                let status_color = if config.enabled { Color::Green } else { Color::DarkGray };
-                
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
-                    Span::styled(config.name.clone(), Style::default().fg(Color::White)),
-                    Span::styled(
-                        format!(" ({})", trigger_type),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]))
-            })
-            .collect();
-
-        let mut workflow_state = ListState::default();
-        if !workflows.is_empty() && self.selected_workflow < workflows.len() {
-            workflow_state.select(Some(self.selected_workflow));
-        }
-
-        let workflow_list = List::new(workflow_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Workflows ")
-                    .border_style(if self.focused_panel == FocusedPanel::Workflows { 
-                        Style::default().fg(Color::Cyan) 
-                    } else { 
-                        Style::default().fg(Color::DarkGray) 
-                    }),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        f.render_stateful_widget(workflow_list, chunks[0], &mut workflow_state);
-
-        // Second panel: runs for selected workflow
-        let workflow_runs = self.get_runs_and_scheduled_for_selected_workflow();
-        let run_items: Vec<ListItem> = workflow_runs
-            .iter()
-            .map(|run_or_scheduled| {
-                match run_or_scheduled {
-                    RunOrScheduled::ActualRun(run) => {
-                        let (icon, color) = match &run.status {
-                            RunStatus::Running => ("⟳", Color::Yellow),
-                            RunStatus::Success => ("✔", Color::Green),
-                            RunStatus::Failed => ("✘", Color::Red),
-                        };
-                        let timestamp = run.started_at
-                            .with_timezone(&chrono::Local)
-                            .format("%m/%d %H:%M:%S")
-                            .to_string();
-                        
-                        ListItem::new(Line::from(vec![
-                            Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                            Span::styled(
-                                format!("#{} ", run.id),
-                                Style::default().fg(Color::White),
-                            ),
-                            Span::styled(
-                                timestamp,
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                        ]))
-                    },
-                    RunOrScheduled::ScheduledRun { next_run, .. } => {
-                        let timestamp = next_run
-                            .with_timezone(&chrono::Local)
-                            .format("%m/%d %H:%M:%S")
-                            .to_string();
-                        
-                        ListItem::new(Line::from(vec![
-                            Span::styled("🕐 ", Style::default().fg(Color::Cyan)),
-                            Span::styled(
-                                "next ",
-                                Style::default().fg(Color::Cyan),
-                            ),
-                            Span::styled(
-                                timestamp,
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                        ]))
-                    }
-                }
-            })
-            .collect();
-
-        let mut run_state = ListState::default();
-        if !workflow_runs.is_empty() && self.selected_run < workflow_runs.len() {
-            run_state.select(Some(self.selected_run));
-        }
-
-        let run_list = List::new(run_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Runs ")
-                    .border_style(if self.focused_panel == FocusedPanel::Runs { 
-                        Style::default().fg(Color::Cyan) 
-                    } else { 
-                        Style::default().fg(Color::DarkGray) 
-                    }),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        f.render_stateful_widget(run_list, chunks[1], &mut run_state);
-
-        // Third panel: selected run details
-        let detail_text = if workflows.is_empty() {
-            vec![
-                Line::from(""),
-                Line::from("No workflows found."),
-                Line::from(""),
-                Line::from("Create a workflow YAML file in the"),
-                Line::from(format!("{} directory.", self.workflows_dir)),
-                Line::from(""),
-                Line::from("Press 't' to refresh and trigger workflows."),
-            ]
-        } else if workflow_runs.is_empty() {
-            vec![
-                Line::from(""),
-                Line::from("No runs for this workflow yet."),
-                Line::from(""),
-                Line::from("Press 't' to trigger the workflow."),
-            ]
-        } else if let Some(run_or_scheduled) = workflow_runs.get(self.selected_run) {
-            match run_or_scheduled {
-                RunOrScheduled::ActualRun(run) => run_details(run),
-                RunOrScheduled::ScheduledRun { workflow_name, next_run } => {
-                    vec![
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("Workflow: ", Style::default().fg(Color::DarkGray)),
-                            Span::styled(workflow_name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                            Span::styled("Scheduled", Style::default().fg(Color::Cyan)),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("Next Run: ", Style::default().fg(Color::DarkGray)),
-                            Span::styled(
-                                next_run.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string(),
-                                Style::default().fg(Color::White),
-                            ),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("In: ", Style::default().fg(Color::DarkGray)),
-                            Span::styled(
-                                format_duration(*next_run - chrono::Utc::now()),
-                                Style::default().fg(Color::Cyan),
-                            ),
-                        ]),
-                        Line::from(""),
-                        Line::from("This run will be triggered automatically by the cron scheduler."),
-                    ]
-                }
-            }
-        } else {
-            vec![]
-        };
-
-        let detail = Paragraph::new(detail_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Results ")
-                    .border_style(if self.focused_panel == FocusedPanel::NodeResults { 
-                        Style::default().fg(Color::Cyan) 
-                    } else { 
-                        Style::default().fg(Color::DarkGray) 
-                    }),
-            )
-            .wrap(Wrap { trim: true })
-            .scroll((self.detail_scroll, 0));
-
-        f.render_widget(detail, chunks[2]);
-
-        // Bottom help bar
-        let help = Paragraph::new(Line::from(vec![
-            Span::styled(" ↑/↓ navigate/scroll ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| Tab switch panel ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| Space toggle enable ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| r refresh ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| l logs ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| t trigger selected ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
-        ]));
-        let area = f.size();
-        let help_area = ratatui::layout::Rect {
-            x: 0,
-            y: area.height.saturating_sub(1),
-            width: area.width,
-            height: 1,
-        };
-        f.render_widget(help, help_area);
-    }
-
-    fn draw_logs_view(&self, f: &mut ratatui::Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(f.size());
-
-        // Get the currently selected workflow name
-        let workflows = self.get_unique_workflows();
-        let selected_workflow_name = if !workflows.is_empty() && self.selected_workflow < workflows.len() {
-            &workflows[self.selected_workflow].name
-        } else {
-            "System"
-        };
-
-        // Main logs area - show only logs for selected workflow
-        let logs = self.logs.lock().unwrap();
-        let workflow_logs = logs.get(selected_workflow_name).cloned().unwrap_or_default();
-        
-        let log_items: Vec<Line> = workflow_logs
-            .iter()
-            .map(|log| {
-                let timestamp = log.timestamp
-                    .with_timezone(&chrono::Local)
-                    .format("%m/%d %H:%M:%S")
-                    .to_string();
-                
-                let (icon, color) = match log.level {
-                    LogLevel::Info => ("ℹ", Color::Blue),
-                    LogLevel::Warning => ("⚠", Color::Yellow),
-                    LogLevel::Error => ("✘", Color::Red),
-                };
-
-                Line::from(vec![
-                    Span::styled(format!("{} ", timestamp), Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                    Span::styled(log.message.clone(), Style::default().fg(Color::White)),
-                ])
-            })
-            .collect();
-
-        let logs_widget = Paragraph::new(log_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" Logs: {} (l to return to workflows) ", selected_workflow_name)),
-            )
-            .scroll((self.log_scroll, 0));
-
-        f.render_widget(logs_widget, chunks[0]);
-
-        // Bottom help bar for logs
-        let help = Paragraph::new(Line::from(vec![
-            Span::styled(" ↑/↓ scroll ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| PgUp/PgDn fast scroll ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| f back to workflows ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
-        ]));
-        f.render_widget(help, chunks[1]);
     }
 
     pub fn log_info(&self, workflow_name: &str, message: String) {
@@ -744,176 +502,5 @@ impl App {
         });
         
         result
-    }
-}
-
-fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
-    let mut lines = vec![];
-
-    lines.push(Line::from(vec![
-        Span::styled("Workflow: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(run.workflow_name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-    ]));
-
-    lines.push(Line::from(vec![
-        Span::styled("Run ID:   ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("#{}", run.id), Style::default().fg(Color::Cyan)),
-    ]));
-
-    lines.push(Line::from(vec![
-        Span::styled("Started:  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            run.started_at.format("%H:%M:%S").to_string(),
-            Style::default().fg(Color::White),
-        ),
-    ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Execution Graph:", Style::default().fg(Color::DarkGray))));
-    lines.push(Line::from(""));
-
-    // Draw the execution graph showing flow between nodes in order
-    for (index, result) in run.node_results.iter().enumerate() {
-        // Add connector line for execution flow (except for first node)
-        if index > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("      │", Style::default().fg(Color::DarkGray)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("      ↓", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
-        let (icon, color) = match &result.status {
-            NodeStatus::Pending => ("○", Color::DarkGray),
-            NodeStatus::Running => ("⟳", Color::Yellow),
-            NodeStatus::Success => ("✔", Color::Green),
-            NodeStatus::Failed(_) => ("✘", Color::Red),
-            NodeStatus::Skipped => ("-", Color::DarkGray),
-        };
-
-        // Add execution order number and node info
-        let order_num = format!("{:2}.", index + 1);
-        lines.push(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled("┌─", Style::default().fg(Color::DarkGray)),
-            Span::styled(order_num, Style::default().fg(Color::Cyan)),
-            Span::styled(" ", Style::default()),
-            Span::styled(format!("{} ", icon), Style::default().fg(color)),
-            Span::styled(result.node_id.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        ]));
-
-        // Show execution timing if available
-        if let Some(finished_at) = result.finished_at {
-            let duration = finished_at - result.started_at;
-            let duration_ms = duration.num_milliseconds();
-            lines.push(Line::from(vec![
-                Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("Duration: {}ms", duration_ms), Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
-        // Show status info
-        match &result.status {
-            NodeStatus::Running => {
-                lines.push(Line::from(vec![
-                    Span::styled(" │  ├─ ", Style::default().fg(Color::Yellow)),
-                    Span::styled("Status: Running...", Style::default().fg(Color::Yellow)),
-                ]));
-            },
-            NodeStatus::Skipped => {
-                lines.push(Line::from(vec![
-                    Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("Skipped: Dependencies not met", Style::default().fg(Color::DarkGray)),
-                ]));
-            },
-            _ => {}
-        }
-
-        // Show truncated output if available
-        if !result.output.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Output:", Style::default().fg(Color::DarkGray)),
-            ]));
-            for (line_idx, line) in result.output.lines().take(2).enumerate() {
-                let connector = if line_idx == 1 && result.output.lines().count() > 2 {
-                    " │  │   └─ [...]"
-                } else {
-                    " │  │      "
-                };
-                let output_line = if line_idx == 1 && result.output.lines().count() > 2 {
-                    format!("{}{}", connector, "")
-                } else {
-                    format!("{}{}", connector, line)
-                };
-                lines.push(Line::from(vec![Span::styled(
-                    output_line,
-                    Style::default().fg(Color::DarkGray),
-                )]));
-            }
-        }
-
-        // Show error details
-        if let NodeStatus::Failed(err) = &result.status {
-            lines.push(Line::from(vec![
-                Span::styled(" │  └─ ", Style::default().fg(Color::Red)),
-                Span::styled(format!("Error: {}", err), Style::default().fg(Color::Red)),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled(" │", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-    }
-
-    // Add summary at the bottom
-    if !run.node_results.is_empty() {
-        let total_nodes = run.node_results.len();
-        let completed_nodes = run.node_results.iter().filter(|r| !matches!(r.status, NodeStatus::Pending | NodeStatus::Running)).count();
-        let successful_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Success)).count();
-        let failed_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Failed(_))).count();
-        let skipped_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Skipped)).count();
-        
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(" └─ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Graph Summary:", Style::default().fg(Color::DarkGray)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("    Progress: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}/{} nodes completed", completed_nodes, total_nodes), Style::default().fg(Color::White)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("    Results:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ✔", successful_nodes), Style::default().fg(Color::Green)),
-            Span::styled(format!(" · {} ✘", failed_nodes), Style::default().fg(Color::Red)),
-            Span::styled(format!(" · {} -", skipped_nodes), Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-
-    lines
-}
-
-fn format_duration(duration: chrono::Duration) -> String {
-    let total_seconds = duration.num_seconds();
-    
-    if total_seconds < 0 {
-        return "overdue".to_string();
-    }
-    
-    let days = total_seconds / 86400;
-    let hours = (total_seconds % 86400) / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-    
-    if days > 0 {
-        format!("{}d {}h {}m", days, hours, minutes)
-    } else if hours > 0 {
-        format!("{}h {}m", hours, minutes)
-    } else if minutes > 0 {
-        format!("{}m {}s", minutes, seconds)
-    } else {
-        format!("{}s", seconds)
     }
 }
