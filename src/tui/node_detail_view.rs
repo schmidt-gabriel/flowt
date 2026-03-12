@@ -90,7 +90,10 @@ impl App {
                     };
 
                     ListItem::new(Line::from(vec![
-                        Span::styled(format!("{:2}. ", index + 1), Style::default().fg(Color::Cyan)),
+                        Span::styled(
+                            format!("{:2}. ", index + 1),
+                            Style::default().fg(Color::Cyan),
+                        ),
                         Span::styled(format!("{} ", icon), Style::default().fg(color)),
                         Span::styled(result.node_id.clone(), Style::default().fg(Color::White)),
                     ]))
@@ -107,11 +110,13 @@ impl App {
                     Block::default()
                         .borders(Borders::ALL)
                         .title(format!(" Nodes - Run #{} ", run.id))
-                        .border_style(if self.node_detail_focused_panel == NodeDetailPanel::NodeList {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        }),
+                        .border_style(
+                            if self.node_detail_focused_panel == NodeDetailPanel::NodeList {
+                                Style::default().fg(Color::Cyan)
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
                 )
                 .highlight_style(
                     Style::default()
@@ -193,54 +198,66 @@ impl App {
 
                 // Error details (if failed)
                 if let NodeStatus::Failed(err) = &node_result.status {
-                    detail_lines.push(Line::from(vec![
-                        Span::styled("Error: ", Style::default().fg(Color::Red)),
-                    ]));
+                    detail_lines.push(Line::from(vec![Span::styled(
+                        "Error: ",
+                        Style::default().fg(Color::Red),
+                    )]));
                     for line in err.lines() {
-                        detail_lines.push(Line::from(vec![
-                            Span::styled(format!("  {}", line), Style::default().fg(Color::Red)),
-                        ]));
+                        detail_lines.push(Line::from(vec![Span::styled(
+                            format!("  {}", line),
+                            Style::default().fg(Color::Red),
+                        )]));
                     }
                     detail_lines.push(Line::from(""));
                 }
 
                 // Shell Output
                 if !node_result.output.is_empty() {
-                    detail_lines.push(Line::from(vec![
-                        Span::styled("Shell Output:", Style::default().fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)),
-                    ]));
+                    detail_lines.push(Line::from(vec![Span::styled(
+                        "Shell Output:",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
                     detail_lines.push(Line::from("───────────────────"));
                     for line in node_result.output.lines() {
-                        detail_lines.push(Line::from(vec![
-                            Span::styled(line, Style::default().fg(Color::White)),
-                        ]));
+                        detail_lines.push(Line::from(vec![Span::styled(
+                            line,
+                            Style::default().fg(Color::White),
+                        )]));
                     }
                     detail_lines.push(Line::from(""));
                 }
 
                 // API Response Data
                 if let Some(response_data) = &node_result.response_data {
-                    detail_lines.push(Line::from(vec![
-                        Span::styled("API Response:", Style::default().fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD)),
-                    ]));
+                    detail_lines.push(Line::from(vec![Span::styled(
+                        "API Response:",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
                     detail_lines.push(Line::from("───────────────────"));
-                    
+
                     // Pretty print JSON
                     match serde_json::to_string_pretty(response_data) {
                         Ok(pretty_json) => {
-                            let json_lines: Vec<Line> = pretty_json.lines().map(|line| {
-                                Line::from(vec![
-                                    Span::styled(line.to_string(), Style::default().fg(Color::Magenta)),
-                                ])
-                            }).collect();
+                            let json_lines: Vec<Line> = pretty_json
+                                .lines()
+                                .map(|line| {
+                                    Line::from(vec![Span::styled(
+                                        line.to_string(),
+                                        Style::default().fg(Color::Magenta),
+                                    )])
+                                })
+                                .collect();
                             detail_lines.extend(json_lines);
                         }
                         Err(_) => {
-                            detail_lines.push(Line::from(vec![
-                                Span::styled("Failed to format JSON", Style::default().fg(Color::Red)),
-                            ]));
+                            detail_lines.push(Line::from(vec![Span::styled(
+                                "Failed to format JSON",
+                                Style::default().fg(Color::Red),
+                            )]));
                         }
                     }
                 }
@@ -250,11 +267,13 @@ impl App {
                         Block::default()
                             .borders(Borders::ALL)
                             .title(" Node Details ")
-                            .border_style(if self.node_detail_focused_panel == NodeDetailPanel::NodeContent {
-                                Style::default().fg(Color::Cyan)
-                            } else {
-                                Style::default().fg(Color::DarkGray)
-                            }),
+                            .border_style(
+                                if self.node_detail_focused_panel == NodeDetailPanel::NodeContent {
+                                    Style::default().fg(Color::Cyan)
+                                } else {
+                                    Style::default().fg(Color::DarkGray)
+                                },
+                            ),
                     )
                     .wrap(Wrap { trim: true })
                     .scroll((self.detail_scroll, 0));

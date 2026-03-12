@@ -24,3 +24,8 @@ cron = "0.12"
 dotenv = "0.15"
 regex = "1"
 polodb_core = "4.1"
+
+[dev-dependencies]
+tempfile = "3.8"
+mockito = "1.4"
+tokio-test = "0.4"

@@ -178,7 +178,7 @@ impl Engine {
     }
 
     // Topological sort to determine execution order based on dependencies
-    fn topological_sort(&self, nodes: &[NodeConfig]) -> Result<Vec<String>> {
+    pub fn topological_sort(&self, nodes: &[NodeConfig]) -> Result<Vec<String>> {
         let mut visited = std::collections::HashSet::new();
         let mut temp_visited = std::collections::HashSet::new();
         let mut result = Vec::new();
@@ -252,9 +252,10 @@ impl Engine {
                 headers,
                 body,
             } => {
-                let interpolated_url = interpolate_template(url, context);
-                let interpolated_headers = interpolate_headers(headers, context);
-                let interpolated_body = body.as_ref().map(|b| interpolate_template(b, context));
+                let interpolated_url = self.interpolate_template(url, context);
+                let interpolated_headers = self.interpolate_headers(headers, context);
+                let interpolated_body =
+                    body.as_ref().map(|b| self.interpolate_template(b, context));
                 run_http(
                     &interpolated_url,
                     method,
@@ -266,13 +267,13 @@ impl Engine {
                 .await
             }
             NodeKind::Shell { cmd, env } => {
-                let interpolated_cmd = interpolate_template(cmd, context);
-                let interpolated_env = interpolate_env(env, context);
+                let interpolated_cmd = self.interpolate_template(cmd, context);
+                let interpolated_env = self.interpolate_env(env, context);
                 let (status, output) = run_shell(&interpolated_cmd, &interpolated_env).await;
                 (status, output, None)
             }
             NodeKind::Log { message } => {
-                let interpolated_message = interpolate_template(message, context);
+                let interpolated_message = self.interpolate_template(message, context);
                 (NodeStatus::Success, interpolated_message, None)
             }
         };
@@ -284,6 +285,102 @@ impl Engine {
             response_data,
             started_at,
             finished_at: Some(Utc::now()),
+        }
+    }
+
+    // Template interpolation functions
+    pub fn interpolate_template(
+        &self,
+        template: &str,
+        context: &HashMap<String, NodeResult>,
+    ) -> String {
+        let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
+
+        re.replace_all(template, |caps: &regex::Captures| {
+            let var_path = &caps[1];
+
+            // Handle environment variables
+            if !var_path.starts_with("steps.") {
+                return std::env::var(var_path).unwrap_or_else(|_| format!("${{{}}}", var_path));
+            }
+
+            // Handle step references: steps.step-id.response.field
+            let parts: Vec<&str> = var_path.split('.').collect();
+            if parts.len() >= 3 && parts[0] == "steps" {
+                let step_id = parts[1];
+
+                if let Some(node_result) = context.get(step_id) {
+                    if parts[2] == "response" && parts.len() >= 4 {
+                        // Access response data field
+                        if let Some(response_data) = &node_result.response_data {
+                            let field_path = &parts[3..];
+                            if let Some(value) = self.get_nested_value(response_data, field_path) {
+                                return self.value_to_string(&value);
+                            }
+                        }
+                    } else if parts[2] == "output" {
+                        return node_result.output.clone();
+                    } else if parts[2] == "status" {
+                        return format!("{:?}", node_result.status);
+                    }
+                }
+            }
+
+            format!("${{{}}}", var_path)
+        })
+        .to_string()
+    }
+
+    pub fn interpolate_headers(
+        &self,
+        headers: &HashMap<String, String>,
+        context: &HashMap<String, NodeResult>,
+    ) -> HashMap<String, String> {
+        headers
+            .iter()
+            .map(|(k, v)| (k.clone(), self.interpolate_template(v, context)))
+            .collect()
+    }
+
+    pub fn interpolate_env(
+        &self,
+        env: &HashMap<String, String>,
+        context: &HashMap<String, NodeResult>,
+    ) -> HashMap<String, String> {
+        env.iter()
+            .map(|(k, v)| (k.clone(), self.interpolate_template(v, context)))
+            .collect()
+    }
+
+    pub fn get_nested_value(&self, value: &Value, path: &[&str]) -> Option<Value> {
+        let mut current = value;
+
+        for &key in path {
+            match current {
+                Value::Object(obj) => {
+                    current = obj.get(key)?;
+                }
+                Value::Array(arr) => {
+                    if let Ok(index) = key.parse::<usize>() {
+                        current = arr.get(index)?;
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+
+        Some(current.clone())
+    }
+
+    pub fn value_to_string(&self, value: &Value) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+            _ => serde_json::to_string(value).unwrap_or_else(|_| "[complex_value]".to_string()),
         }
     }
 }
@@ -405,95 +502,5 @@ async fn run_shell(cmd: &str, env: &HashMap<String, String>) -> (NodeStatus, Str
             }
         }
         Err(e) => (NodeStatus::Failed(e.to_string()), String::new()),
-    }
-}
-
-// Template interpolation functions
-fn interpolate_template(template: &str, context: &HashMap<String, NodeResult>) -> String {
-    let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
-
-    re.replace_all(template, |caps: &regex::Captures| {
-        let var_path = &caps[1];
-
-        // Handle environment variables
-        if !var_path.starts_with("steps.") {
-            return std::env::var(var_path).unwrap_or_else(|_| format!("${{{}}}", var_path));
-        }
-
-        // Handle step references: steps.step-id.response.field
-        let parts: Vec<&str> = var_path.split('.').collect();
-        if parts.len() >= 3 && parts[0] == "steps" {
-            let step_id = parts[1];
-
-            if let Some(node_result) = context.get(step_id) {
-                if parts[2] == "response" && parts.len() >= 4 {
-                    // Access response data field
-                    if let Some(response_data) = &node_result.response_data {
-                        let field_path = &parts[3..];
-                        if let Some(value) = get_nested_value(response_data, field_path) {
-                            return value_to_string(&value);
-                        }
-                    }
-                } else if parts[2] == "output" {
-                    return node_result.output.clone();
-                } else if parts[2] == "status" {
-                    return format!("{:?}", node_result.status);
-                }
-            }
-        }
-
-        format!("${{{}}}", var_path)
-    })
-    .to_string()
-}
-
-fn interpolate_headers(
-    headers: &HashMap<String, String>,
-    context: &HashMap<String, NodeResult>,
-) -> HashMap<String, String> {
-    headers
-        .iter()
-        .map(|(k, v)| (k.clone(), interpolate_template(v, context)))
-        .collect()
-}
-
-fn interpolate_env(
-    env: &HashMap<String, String>,
-    context: &HashMap<String, NodeResult>,
-) -> HashMap<String, String> {
-    env.iter()
-        .map(|(k, v)| (k.clone(), interpolate_template(v, context)))
-        .collect()
-}
-
-fn get_nested_value(value: &Value, path: &[&str]) -> Option<Value> {
-    let mut current = value;
-
-    for &key in path {
-        match current {
-            Value::Object(obj) => {
-                current = obj.get(key)?;
-            }
-            Value::Array(arr) => {
-                if let Ok(index) = key.parse::<usize>() {
-                    current = arr.get(index)?;
-                } else {
-                    return None;
-                }
-            }
-            _ => return None,
-        }
-    }
-
-    Some(current.clone())
-}
-
-fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| "[complex_value]".to_string()),
     }
 }

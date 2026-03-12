@@ -43,7 +43,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LogLevel {
     Info,
     Error,
@@ -206,15 +206,22 @@ impl App {
                                     if self.current_view == AppView::Workflows {
                                         if self.focused_panel == FocusedPanel::Workflows {
                                             self.toggle_workflow_enabled();
-                                        } else if self.focused_panel == FocusedPanel::Runs || self.focused_panel == FocusedPanel::NodeResults {
+                                        } else if self.focused_panel == FocusedPanel::Runs
+                                            || self.focused_panel == FocusedPanel::NodeResults
+                                        {
                                             // Enter detailed view for the selected node
-                                            let workflow_runs = self.get_runs_and_scheduled_for_selected_workflow();
-                                            if let Some(RunOrScheduled::ActualRun(run)) = workflow_runs.get(self.selected_run) {
+                                            let workflow_runs =
+                                                self.get_runs_and_scheduled_for_selected_workflow();
+                                            if let Some(RunOrScheduled::ActualRun(run)) =
+                                                workflow_runs.get(self.selected_run)
+                                            {
                                                 if !run.node_results.is_empty() {
                                                     self.selected_node = 0; // Reset to first node
                                                     self.current_view = AppView::NodeDetail;
                                                     self.detail_scroll = 0;
-                                                    self.node_detail_focused_panel = NodeDetailPanel::NodeList; // Start with node list focused
+                                                    self.node_detail_focused_panel =
+                                                        NodeDetailPanel::NodeList;
+                                                    // Start with node list focused
                                                 }
                                             }
                                         }
@@ -223,10 +230,15 @@ impl App {
                                 KeyCode::Tab | KeyCode::Right => {
                                     if self.current_view == AppView::NodeDetail {
                                         // In detail view, switch between panels
-                                        self.node_detail_focused_panel = match self.node_detail_focused_panel {
-                                            NodeDetailPanel::NodeList => NodeDetailPanel::NodeContent,
-                                            NodeDetailPanel::NodeContent => NodeDetailPanel::NodeList,
-                                        };
+                                        self.node_detail_focused_panel =
+                                            match self.node_detail_focused_panel {
+                                                NodeDetailPanel::NodeList => {
+                                                    NodeDetailPanel::NodeContent
+                                                }
+                                                NodeDetailPanel::NodeContent => {
+                                                    NodeDetailPanel::NodeList
+                                                }
+                                            };
                                     } else {
                                         // Switch focus between panels (Tab and Right arrow)
                                         self.focused_panel = match self.focused_panel {
@@ -240,10 +252,15 @@ impl App {
                                 KeyCode::Left => {
                                     if self.current_view == AppView::NodeDetail {
                                         // In detail view, switch between panels
-                                        self.node_detail_focused_panel = match self.node_detail_focused_panel {
-                                            NodeDetailPanel::NodeList => NodeDetailPanel::NodeContent,
-                                            NodeDetailPanel::NodeContent => NodeDetailPanel::NodeList,
-                                        };
+                                        self.node_detail_focused_panel =
+                                            match self.node_detail_focused_panel {
+                                                NodeDetailPanel::NodeList => {
+                                                    NodeDetailPanel::NodeContent
+                                                }
+                                                NodeDetailPanel::NodeContent => {
+                                                    NodeDetailPanel::NodeList
+                                                }
+                                            };
                                     } else {
                                         // Switch focus between panels in reverse (Left arrow)
                                         self.focused_panel = match self.focused_panel {
@@ -264,16 +281,23 @@ impl App {
                                     } else if self.current_view == AppView::NodeDetail {
                                         match self.node_detail_focused_panel {
                                             NodeDetailPanel::NodeList => {
-                                                let workflow_runs = self.get_runs_and_scheduled_for_selected_workflow();
-                                                if let Some(RunOrScheduled::ActualRun(run)) = workflow_runs.get(self.selected_run) {
-                                                    if self.selected_node + 1 < run.node_results.len() && !run.node_results.is_empty() {
+                                                let workflow_runs = self
+                                                    .get_runs_and_scheduled_for_selected_workflow();
+                                                if let Some(RunOrScheduled::ActualRun(run)) =
+                                                    workflow_runs.get(self.selected_run)
+                                                {
+                                                    if self.selected_node + 1
+                                                        < run.node_results.len()
+                                                        && !run.node_results.is_empty()
+                                                    {
                                                         self.selected_node += 1;
                                                         self.detail_scroll = 0; // Reset scroll when selecting new node
                                                     }
                                                 }
                                             }
                                             NodeDetailPanel::NodeContent => {
-                                                self.detail_scroll = self.detail_scroll.saturating_add(1);
+                                                self.detail_scroll =
+                                                    self.detail_scroll.saturating_add(1);
                                             }
                                         }
                                     } else {
@@ -321,7 +345,8 @@ impl App {
                                                 }
                                             }
                                             NodeDetailPanel::NodeContent => {
-                                                self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                                                self.detail_scroll =
+                                                    self.detail_scroll.saturating_sub(1);
                                             }
                                         }
                                     } else {
@@ -438,7 +463,7 @@ impl App {
             level: LogLevel::Info,
             message,
         };
-        
+
         // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
@@ -451,7 +476,7 @@ impl App {
                 workflow_logs.drain(0..excess);
             }
         }
-        
+
         // Also persist to database
         if let Ok(storage) = StorageService::new() {
             let _ = storage.save_log_entry(workflow_name, &entry);
@@ -464,7 +489,7 @@ impl App {
             level: LogLevel::Warning,
             message,
         };
-        
+
         // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
@@ -476,7 +501,7 @@ impl App {
                 workflow_logs.drain(0..excess);
             }
         }
-        
+
         // Also persist to database
         if let Ok(storage) = StorageService::new() {
             let _ = storage.save_log_entry(workflow_name, &entry);
@@ -489,7 +514,7 @@ impl App {
             level: LogLevel::Error,
             message,
         };
-        
+
         // Add to in-memory logs
         if let Ok(mut logs) = self.logs.try_lock() {
             let workflow_logs = logs
@@ -501,7 +526,7 @@ impl App {
                 workflow_logs.drain(0..excess);
             }
         }
-        
+
         // Also persist to database
         if let Ok(storage) = StorageService::new() {
             let _ = storage.save_log_entry(workflow_name, &entry);
@@ -534,7 +559,10 @@ impl App {
             }
         }
 
-        self.log_error("System", format!("Could not find YAML file for workflow: {}", workflow_name));
+        self.log_error(
+            "System",
+            format!("Could not find YAML file for workflow: {}", workflow_name),
+        );
         false
     }
 
@@ -560,9 +588,7 @@ impl App {
         println!("Opening {} for editing with {}", file_path, editor);
 
         // Launch editor
-        let result = std::process::Command::new(&editor)
-            .arg(file_path)
-            .status();
+        let result = std::process::Command::new(&editor).arg(file_path).status();
 
         match result {
             Ok(status) => {

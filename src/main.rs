@@ -391,16 +391,16 @@ async fn main() -> Result<()> {
             let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
             loop {
                 app.run()?;
-                
+
                 // Check if edit was requested
                 if let Some(file_path) = app.edit_requested.clone() {
                     // Exit TUI cleanly
                     disable_raw_mode()?;
                     execute!(std::io::stdout(), LeaveAlternateScreen)?;
-                    
+
                     // Edit the file
                     tui::App::edit_workflow_external(&file_path);
-                    
+
                     // Reset edit request and restart TUI
                     app.edit_requested = None;
                     enable_raw_mode()?;
@@ -452,16 +452,16 @@ async fn main() -> Result<()> {
             let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
             loop {
                 app.run()?;
-                
+
                 // Check if edit was requested
                 if let Some(file_path) = app.edit_requested.clone() {
                     // Exit TUI cleanly
                     disable_raw_mode()?;
                     execute!(std::io::stdout(), LeaveAlternateScreen)?;
-                    
+
                     // Edit the file
                     tui::App::edit_workflow_external(&file_path);
-                    
+
                     // Reset edit request and restart TUI
                     app.edit_requested = None;
                     enable_raw_mode()?;

@@ -39,8 +39,8 @@ pub struct ApiResponse {
     pub id: String,
     pub url: String,
     pub method: String,
-    pub headers_hash: u64,
-    pub body_hash: Option<u64>,
+    pub headers_hash: String, // Changed from u64 to String to avoid BSON issues
+    pub body_hash: Option<String>, // Changed from Option<u64> to Option<String>
     pub response_data: String,
     pub status_code: u16,
     pub timestamp: DateTime<Utc>,
@@ -227,12 +227,12 @@ impl StorageService {
             k.hash(&mut headers_hasher);
             v.hash(&mut headers_hasher);
         }
-        let headers_hash = headers_hasher.finish();
+        let headers_hash = headers_hasher.finish().to_string();
 
         let body_hash = body.map(|b| {
             let mut body_hasher = DefaultHasher::new();
             b.hash(&mut body_hasher);
-            body_hasher.finish()
+            body_hasher.finish().to_string()
         });
 
         let api_response = ApiResponse {
