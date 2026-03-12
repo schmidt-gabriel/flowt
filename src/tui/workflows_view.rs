@@ -29,7 +29,6 @@ impl App {
                     match &config.triggers[0] {
                         TriggerConfig::Manual => "manual",
                         TriggerConfig::Cron { .. } => "cron",
-                        TriggerConfig::Webhook { .. } => "webhook",
                     }
                 } else {
                     "none"

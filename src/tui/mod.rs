@@ -74,6 +74,7 @@ pub struct App {
     pub log_scroll: u16,
     pub selected_node: usize,
     pub node_detail_focused_panel: NodeDetailPanel,
+    pub edit_requested: Option<String>, // Path to file to edit
 }
 
 #[derive(PartialEq)]
@@ -118,6 +119,7 @@ impl App {
             log_scroll: 0,
             selected_node: 0,
             node_detail_focused_panel: NodeDetailPanel::NodeList,
+            edit_requested: None,
         }
     }
 
@@ -175,6 +177,13 @@ impl App {
                                 KeyCode::Char('t') => {
                                     if self.current_view == AppView::Workflows {
                                         self.trigger_workflows();
+                                    }
+                                }
+                                KeyCode::Char('e') => {
+                                    if self.current_view == AppView::Workflows {
+                                        if self.request_edit() {
+                                            break; // Exit TUI for editing
+                                        }
                                     }
                                 }
                                 KeyCode::Esc => {
@@ -496,6 +505,76 @@ impl App {
         // Also persist to database
         if let Ok(storage) = StorageService::new() {
             let _ = storage.save_log_entry(workflow_name, &entry);
+        }
+    }
+
+    fn request_edit(&mut self) -> bool {
+        let workflows = self.get_unique_workflows();
+        if workflows.is_empty() || self.selected_workflow >= workflows.len() {
+            self.log_warning("System", "No workflow selected to edit".to_string());
+            return false;
+        }
+
+        let selected_workflow = &workflows[self.selected_workflow];
+        let workflow_name = &selected_workflow.name;
+
+        // Find the YAML file for this workflow
+        if let Ok(entries) = std::fs::read_dir(&self.workflows_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let extension = path.extension().and_then(|e| e.to_str());
+                if extension == Some("yaml") || extension == Some("yml") {
+                    if let Ok(workflow) = WorkflowConfig::load(path.to_str().unwrap_or("")) {
+                        if workflow.name == *workflow_name {
+                            self.edit_requested = Some(path.to_string_lossy().to_string());
+                            return true; // Signal to exit TUI
+                        }
+                    }
+                }
+            }
+        }
+
+        self.log_error("System", format!("Could not find YAML file for workflow: {}", workflow_name));
+        false
+    }
+
+    pub fn edit_workflow_external(file_path: &str) {
+        // Get editor from environment variable or use fallbacks
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| {
+                // Try common editors in order of preference
+                for editor in ["vim", "nano", "code", "emacs"] {
+                    if std::process::Command::new("which")
+                        .arg(editor)
+                        .output()
+                        .map(|output| output.status.success())
+                        .unwrap_or(false)
+                    {
+                        return editor.to_string();
+                    }
+                }
+                "vi".to_string() // Last resort fallback
+            });
+
+        println!("Opening {} for editing with {}", file_path, editor);
+
+        // Launch editor
+        let result = std::process::Command::new(&editor)
+            .arg(file_path)
+            .status();
+
+        match result {
+            Ok(status) => {
+                if status.success() {
+                    println!("Finished editing {}", file_path);
+                } else {
+                    println!("Editor exited with non-zero status: {}", status);
+                }
+            }
+            Err(e) => {
+                println!("Failed to launch editor {}: {}", editor, e);
+            }
         }
     }
 

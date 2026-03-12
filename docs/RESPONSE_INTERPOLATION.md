@@ -48,11 +48,6 @@ nodes:
     cmd: "echo 'Hello ${steps.fetch-user.response.name}!'"
     depends_on: ["fetch-user"]
     
-  - id: send-notification
-    type: slack
-    webhook_url: "${SLACK_WEBHOOK_URL}"
-    message: "User ${steps.fetch-user.response.name} (${steps.fetch-user.response.email}) has logged in"
-    depends_on: ["fetch-user"]
 ```
 
 ### Nested JSON Fields
@@ -97,10 +92,6 @@ Template interpolation works in all node types:
 ### Shell Nodes
 - `cmd`
 - `env` (values)
-
-### Slack Nodes
-- `webhook_url`
-- `message`
 
 ### Log Nodes
 - `message`

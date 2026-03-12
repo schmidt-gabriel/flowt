@@ -29,7 +29,6 @@ impl App {
                         .map(|trigger| match trigger {
                             TriggerConfig::Manual => "Manual trigger".to_string(),
                             TriggerConfig::Cron { schedule } => format!("Cron: {}", schedule),
-                            TriggerConfig::Webhook { port } => format!("Webhook on port {}", port),
                         })
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -132,7 +131,6 @@ impl App {
                             match &node.kind {
                                 NodeKind::Http { .. } => "HTTP",
                                 NodeKind::Shell { .. } => "Shell",
-                                NodeKind::Slack { .. } => "Slack",
                                 NodeKind::Log { .. } => "Log",
                             },
                             Style::default().fg(Color::Green),
@@ -190,15 +188,6 @@ impl App {
                                     ),
                                 ]));
                             }
-                        }
-                        NodeKind::Slack { message, .. } => {
-                            description_lines.push(Line::from(vec![
-                                Span::styled(
-                                    "     Message: ",
-                                    Style::default().fg(Color::DarkGray),
-                                ),
-                                Span::styled(message, Style::default().fg(Color::Blue)),
-                            ]));
                         }
                         NodeKind::Log { message } => {
                             description_lines.push(Line::from(vec![

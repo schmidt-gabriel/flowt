@@ -19,7 +19,7 @@ A powerful workflow automation engine built in Rust. Define workflows as YAML fi
 - **Fast & Lightweight**: Built in Rust for maximum performance
 - **YAML Configuration**: Simple and readable workflow definitions
 - **Terminal UI**: Beautiful TUI dashboard for monitoring workflows
-- **Multiple Triggers**: Manual, cron-based, and webhook triggers
+- **Multiple Triggers**: Manual, cron-based triggers
 - **HTTP Requests**: Make API calls with custom headers and bodies
 - **Shell Commands**: Execute shell scripts seamlessly
 - **Logging**: Built-in logging for workflow monitoring
@@ -92,8 +92,6 @@ triggers:
   - type: manual                    # Manual trigger
   # - type: cron                    # Scheduled trigger
   #   schedule: "0 */6 * * *"       # Every 6 hours
-  # - type: webhook                 # HTTP webhook trigger
-  #   port: 8080
 
 nodes:
   - id: step-1
@@ -109,12 +107,6 @@ nodes:
     timeout: "30s"
     
   - id: step-3
-    type: slack
-    webhook_url: "${SLACK_WEBHOOK_URL}"
-    message: "Workflow completed successfully!"
-    when: "step-2 == success"
-    
-  - id: step-4
     type: log
     message: "Workflow finished"
 ```
@@ -141,14 +133,6 @@ nodes:
   cmd: "npm run build"
   env:
     NODE_ENV: "production"
-```
-
-#### Slack Notifications
-```yaml
-- id: notify-team
-  type: slack
-  webhook_url: "${SLACK_WEBHOOK_URL}"
-  message: "Deployment completed successfully!"
 ```
 
 #### Logging

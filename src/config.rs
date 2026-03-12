@@ -20,7 +20,6 @@ pub struct WorkflowConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TriggerConfig {
     Cron { schedule: String },
-    Webhook { port: u16 },
     Manual,
 }
 
@@ -57,10 +56,6 @@ pub enum NodeKind {
         cmd: String,
         #[serde(default)]
         env: HashMap<String, String>,
-    },
-    Slack {
-        webhook_url: String,
-        message: String,
     },
     Log {
         message: String,

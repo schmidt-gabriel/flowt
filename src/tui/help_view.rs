@@ -45,6 +45,7 @@ impl App {
             Line::from("  Space/Enter  Toggle workflow enabled/disabled state"),
             Line::from("  Enter        View detailed node results (when focused on runs or results panel)"),
             Line::from("  t            Trigger the selected workflow manually"),
+            Line::from("  e            Edit the selected workflow YAML file"),
             Line::from("  r            Refresh workflow list and data"),
             Line::from(""),
             Line::from(vec![Span::styled(
@@ -138,7 +139,6 @@ impl App {
             Line::from(""),
             Line::from("  manual       Triggered manually with 't' key"),
             Line::from("  cron         Automatically triggered on schedule"),
-            Line::from("  webhook      Triggered by HTTP requests"),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Tips:",

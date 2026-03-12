@@ -271,15 +271,6 @@ impl Engine {
                 let (status, output) = run_shell(&interpolated_cmd, &interpolated_env).await;
                 (status, output, None)
             }
-            NodeKind::Slack {
-                webhook_url,
-                message,
-            } => {
-                let interpolated_url = interpolate_template(webhook_url, context);
-                let interpolated_message = interpolate_template(message, context);
-                let (status, output) = run_slack(&interpolated_url, &interpolated_message).await;
-                (status, output, None)
-            }
             NodeKind::Log { message } => {
                 let interpolated_message = interpolate_template(message, context);
                 (NodeStatus::Success, interpolated_message, None)
@@ -415,15 +406,6 @@ async fn run_shell(cmd: &str, env: &HashMap<String, String>) -> (NodeStatus, Str
         }
         Err(e) => (NodeStatus::Failed(e.to_string()), String::new()),
     }
-}
-
-async fn run_slack(webhook_url: &str, message: &str) -> (NodeStatus, String) {
-    let body = format!("{{\"text\":\"{}\"}}", message.replace('"', "\\\""));
-    let cmd = format!(
-        "curl -s -X POST -H 'Content-Type: application/json' -d '{}' '{}'",
-        body, webhook_url
-    );
-    run_shell(&cmd, &HashMap::new()).await
 }
 
 // Template interpolation functions
