@@ -60,6 +60,9 @@ flowt run workflows/health-check.yaml
 # Launch the TUI dashboard explicitly
 flowt tui [workflows-directory]
 
+# Start the workflow service in terminal mode (logs only)
+flowt serve [workflows-directory]
+
 # List workflows in a directory
 flowt list [workflows-directory]
 ```
@@ -79,6 +82,27 @@ flowt tui /path/to/workflows
 ```
 
 The TUI provides a real-time view of running workflows, their status, and execution history.
+
+### Service Mode
+
+Run Flowt as a background service with terminal-only logging, while connecting multiple TUI instances:
+
+```bash
+# Terminal 1: Start the service
+flowt serve [workflows-directory]
+
+# Terminal 2: Connect TUI to the running service  
+flowt tui [workflows-directory]  # Automatically detects and connects
+```
+
+**Service Mode Benefits:**
+- **Persistent Workflow Engine**: Cron jobs and workflows continue running in the background
+- **Multiple TUI Connections**: Connect multiple TUI instances to the same service
+- **Terminal Logs**: Real-time colored logs in the service terminal
+- **Shared State**: All TUI connections share the same workflow runs and history
+- **Graceful Shutdown**: Use Ctrl+C to stop the service cleanly
+
+When a service is running, `flowt tui` automatically connects to it instead of starting a new engine instance.
 
 ## Workflow Configuration
 
