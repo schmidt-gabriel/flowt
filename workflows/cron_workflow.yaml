@@ -1,0 +1,13 @@
+name: Hello Workflow
+description: Simple scheduled workflow  
+enabled: true
+triggers:
+  - type: cron
+    schedule: "0 */10 * * * *"  # Every 10 minutes
+
+nodes:
+  - id: hello-step
+    type: shell
+    cmd: echo "Hello from scheduled workflow at $(date)"
+    env: {}
+    depends_on: []

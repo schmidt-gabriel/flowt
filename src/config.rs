@@ -35,6 +35,8 @@ pub struct NodeConfig {
     pub retry: Option<u32>,
     #[serde(default)]
     pub timeout: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,  // Node IDs that this node depends on
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

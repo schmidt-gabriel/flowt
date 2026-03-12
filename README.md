@@ -220,7 +220,7 @@ Flowt supports the following environment variables for directory configuration:
 # Use default locations
 flowt
 
-# Set base directory (workflows in /my/flowt/workflows, cache in /my/flowt/cache)
+# Set base directory (workflows in /my/flowt/workflows, cache in /my/flowt/.cache)
 export FLOWT_DIR="/my/flowt"
 flowt
 

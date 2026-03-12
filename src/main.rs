@@ -30,7 +30,7 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
 
         if let Ok(workflows) = WorkflowConfig::load_all(workflows_dir, Some(logs.clone())) {
             for workflow in workflows {
-                if workflow.enabled {
+                if workflow.enabled && !workflow.nodes.is_empty() {
                     for trigger in &workflow.triggers {
                         if let TriggerConfig::Cron { schedule } = trigger {
                             if let Ok(cron_schedule) = cron::Schedule::from_str(schedule) {
@@ -250,6 +250,19 @@ async fn main() -> Result<()> {
                 if !wf.description.is_empty() {
                     println!("    {}", wf.description);
                 }
+                
+                // Show execution graph structure
+                println!("    Execution graph:");
+                for (i, node) in wf.nodes.iter().enumerate() {
+                    let connector = if i == wf.nodes.len() - 1 { "└─" } else { "├─" };
+                    
+                    if node.depends_on.is_empty() {
+                        println!("      {} {} (entry point)", connector, node.id);
+                    } else {
+                        println!("      {} {} → depends on: {}", connector, node.id, node.depends_on.join(", "));
+                    }
+                }
+                println!();
             }
         }
 

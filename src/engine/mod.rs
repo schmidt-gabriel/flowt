@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 
 fn default_cache_dir() -> String {
     std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/cache", dir))
+        .map(|dir| format!("{}/.cache", dir))
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/cache", home)
+            format!("{}/.flowt/.cache", home)
         })
 }
 
@@ -85,9 +85,31 @@ impl Engine {
         }
 
         let mut context: HashMap<String, NodeResult> = HashMap::new();
+        let execution_order = self.topological_sort(&workflow.nodes)?;
 
-        for node in &workflow.nodes {
-            let result = self.execute_node(node, &context, &run.id).await;
+        for node_id in execution_order {
+            let node = workflow.nodes.iter().find(|n| n.id == node_id).unwrap();
+            
+            // Check if all dependencies are satisfied and successful
+            let dependencies_satisfied = node.depends_on.iter().all(|dep_id| {
+                context.get(dep_id).map_or(false, |result| {
+                    matches!(result.status, NodeStatus::Success)
+                })
+            });
+
+            let result = if dependencies_satisfied || node.depends_on.is_empty() {
+                self.execute_node(node, &context, &run.id).await
+            } else {
+                // Skip if dependencies failed
+                NodeResult {
+                    node_id: node.id.clone(),
+                    status: NodeStatus::Skipped,
+                    output: "Skipped due to failed dependencies".to_string(),
+                    started_at: Utc::now(),
+                    finished_at: Some(Utc::now()),
+                }
+            };
+
             context.insert(node.id.clone(), result.clone());
 
             {
@@ -101,7 +123,7 @@ impl Engine {
 
             if matches!(result.status, NodeStatus::Failed(_)) {
                 run.status = RunStatus::Failed;
-                break;
+                // Continue execution to show which nodes would be skipped
             }
         }
 
@@ -120,6 +142,57 @@ impl Engine {
         }
 
         Ok(run)
+    }
+
+    // Topological sort to determine execution order based on dependencies
+    fn topological_sort(&self, nodes: &[NodeConfig]) -> Result<Vec<String>> {
+        let mut visited = std::collections::HashSet::new();
+        let mut temp_visited = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        
+        // Create a map for quick node lookup
+        let node_map: HashMap<String, &NodeConfig> = nodes.iter()
+            .map(|n| (n.id.clone(), n))
+            .collect();
+
+        // Recursive DFS for topological sort
+        fn visit(
+            node_id: &str,
+            node_map: &HashMap<String, &NodeConfig>,
+            visited: &mut std::collections::HashSet<String>,
+            temp_visited: &mut std::collections::HashSet<String>,
+            result: &mut Vec<String>,
+        ) -> Result<()> {
+            if temp_visited.contains(node_id) {
+                return Err(anyhow::anyhow!("Circular dependency detected involving node: {}", node_id));
+            }
+            if visited.contains(node_id) {
+                return Ok(());
+            }
+
+            temp_visited.insert(node_id.to_string());
+
+            if let Some(node) = node_map.get(node_id) {
+                for dep in &node.depends_on {
+                    visit(dep, node_map, visited, temp_visited, result)?;
+                }
+            }
+
+            temp_visited.remove(node_id);
+            visited.insert(node_id.to_string());
+            result.push(node_id.to_string());
+
+            Ok(())
+        }
+
+        // Visit all nodes
+        for node in nodes {
+            if !visited.contains(&node.id) {
+                visit(&node.id, &node_map, &mut visited, &mut temp_visited, &mut result)?;
+            }
+        }
+
+        Ok(result)
     }
 
     async fn execute_node(

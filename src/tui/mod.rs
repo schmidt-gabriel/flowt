@@ -17,7 +17,6 @@ use ratatui::{
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
@@ -97,10 +96,15 @@ impl App {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
-            if event::poll(Duration::from_millis(200))? {
-                if let Event::Key(key) = event::read()? {
+            // Block until user input, no automatic refresh
+            if let Ok(event) = event::read() {
+                if let Event::Key(key) = event {
                     match key.code {
                         KeyCode::Char('q') => break,
+                        KeyCode::Char('r') => {
+                            // Manual refresh - just continue the loop to redraw
+                            continue;
+                        }
                         KeyCode::Char('l') => {
                             // Toggle between workflows and logs view
                             self.current_view = match self.current_view {
@@ -444,8 +448,9 @@ impl App {
             Span::styled(" ↑/↓ navigate/scroll ", Style::default().fg(Color::DarkGray)),
             Span::styled("| Tab switch panel ", Style::default().fg(Color::DarkGray)),
             Span::styled("| Space toggle enable ", Style::default().fg(Color::DarkGray)),
+            Span::styled("| r refresh ", Style::default().fg(Color::DarkGray)),
             Span::styled("| l logs ", Style::default().fg(Color::DarkGray)),
-            Span::styled("| t trigger ", Style::default().fg(Color::DarkGray)),
+            Span::styled("| t trigger selected ", Style::default().fg(Color::DarkGray)),
             Span::styled("| q quit ", Style::default().fg(Color::DarkGray)),
         ]));
         let area = f.size();
@@ -569,57 +574,63 @@ impl App {
 
     fn trigger_workflows(&self) {
         if let Ok(workflows) = WorkflowConfig::load_all(&self.workflows_dir, Some(self.logs.clone())) {
-            let enabled_count = workflows.iter().filter(|w| w.enabled).count();
-            self.log_info("System", format!("Triggering {} enabled workflows", enabled_count));
+            if workflows.is_empty() || self.selected_workflow >= workflows.len() {
+                self.log_info("System", "No workflow selected or available".to_string());
+                return;
+            }
             
-            // Run all enabled workflows
-            for wf in workflows {
-                if wf.enabled {
-                    let workflow_name = wf.name.clone();
-                    self.log_info(&workflow_name, format!("Starting workflow: {}", workflow_name));
-                    let engine_clone = self.engine.clone();
-                    let logs_clone = self.logs.clone();
-                    tokio::spawn(async move {
-                        match engine_clone.run_workflow(&wf).await {
-                            Ok(run) => {
-                                if let Ok(mut logs) = logs_clone.try_lock() {
-                                    match run.status {
-                                        crate::engine::RunStatus::Success => {
-                                            let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
-                                            workflow_logs.push(crate::tui::LogEntry {
-                                                timestamp: chrono::Utc::now(),
-                                                level: crate::tui::LogLevel::Info,
-                                                message: format!("✓ Workflow completed successfully: {}", workflow_name),
-                                            });
-                                        },
-                                        crate::engine::RunStatus::Failed => {
-                                            let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
-                                            workflow_logs.push(crate::tui::LogEntry {
-                                                timestamp: chrono::Utc::now(),
-                                                level: crate::tui::LogLevel::Error,
-                                                message: format!("✗ Workflow failed: {}", workflow_name),
-                                            });
-                                        },
-                                        _ => {}
-                                    }
-                                }
-                            },
-                            Err(e) => {
-                                if let Ok(mut logs) = logs_clone.try_lock() {
+            let selected_workflow = &workflows[self.selected_workflow];
+            
+            if !selected_workflow.enabled {
+                self.log_info("System", format!("Workflow '{}' is disabled", selected_workflow.name));
+                return;
+            }
+            
+            let workflow_name = selected_workflow.name.clone();
+            self.log_info(&workflow_name, format!("Manually triggered workflow: {}", workflow_name));
+            
+            let wf = selected_workflow.clone();
+            let engine_clone = self.engine.clone();
+            let logs_clone = self.logs.clone();
+            tokio::spawn(async move {
+                match engine_clone.run_workflow(&wf).await {
+                    Ok(run) => {
+                        if let Ok(mut logs) = logs_clone.try_lock() {
+                            match run.status {
+                                crate::engine::RunStatus::Success => {
+                                    let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                                    workflow_logs.push(crate::tui::LogEntry {
+                                        timestamp: chrono::Utc::now(),
+                                        level: crate::tui::LogLevel::Info,
+                                        message: format!("✓ Manual workflow completed successfully: {}", workflow_name),
+                                    });
+                                },
+                                crate::engine::RunStatus::Failed => {
                                     let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
                                     workflow_logs.push(crate::tui::LogEntry {
                                         timestamp: chrono::Utc::now(),
                                         level: crate::tui::LogLevel::Error,
-                                        message: format!("✗ Error running workflow {}: {}", workflow_name, e),
+                                        message: format!("✗ Manual workflow failed: {}", workflow_name),
                                     });
-                                }
+                                },
+                                _ => {}
                             }
                         }
-                    });
+                    },
+                    Err(e) => {
+                        if let Ok(mut logs) = logs_clone.try_lock() {
+                            let workflow_logs = logs.entry(workflow_name.clone()).or_insert_with(Vec::new);
+                            workflow_logs.push(crate::tui::LogEntry {
+                                timestamp: chrono::Utc::now(),
+                                level: crate::tui::LogLevel::Error,
+                                message: format!("✗ Error running manual workflow {}: {}", workflow_name, e),
+                            });
+                        }
+                    }
                 }
-            }
+            });
         } else {
-            self.log_error("System", "Failed to load workflows for triggering".to_string());
+            self.log_info("System", "Failed to load workflows for triggering".to_string());
         }
     }
 
@@ -758,10 +769,21 @@ fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
     ]));
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Nodes:", Style::default().fg(Color::DarkGray))));
+    lines.push(Line::from(Span::styled("Execution Graph:", Style::default().fg(Color::DarkGray))));
     lines.push(Line::from(""));
 
-    for result in &run.node_results {
+    // Draw the execution graph showing flow between nodes in order
+    for (index, result) in run.node_results.iter().enumerate() {
+        // Add connector line for execution flow (except for first node)
+        if index > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("      │", Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("      ↓", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
         let (icon, color) = match &result.status {
             NodeStatus::Pending => ("○", Color::DarkGray),
             NodeStatus::Running => ("⟳", Color::Yellow),
@@ -770,28 +792,104 @@ fn run_details(run: &WorkflowRun) -> Vec<Line<'static>> {
             NodeStatus::Skipped => ("-", Color::DarkGray),
         };
 
+        // Add execution order number and node info
+        let order_num = format!("{:2}.", index + 1);
         lines.push(Line::from(vec![
-            Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+            Span::styled(" ", Style::default()),
+            Span::styled("┌─", Style::default().fg(Color::DarkGray)),
+            Span::styled(order_num, Style::default().fg(Color::Cyan)),
+            Span::styled(" ", Style::default()),
+            Span::styled(format!("{} ", icon), Style::default().fg(color)),
             Span::styled(result.node_id.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         ]));
 
+        // Show execution timing if available
+        if let Some(finished_at) = result.finished_at {
+            let duration = finished_at - result.started_at;
+            let duration_ms = duration.num_milliseconds();
+            lines.push(Line::from(vec![
+                Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Duration: {}ms", duration_ms), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        // Show status info
+        match &result.status {
+            NodeStatus::Running => {
+                lines.push(Line::from(vec![
+                    Span::styled(" │  ├─ ", Style::default().fg(Color::Yellow)),
+                    Span::styled("Status: Running...", Style::default().fg(Color::Yellow)),
+                ]));
+            },
+            NodeStatus::Skipped => {
+                lines.push(Line::from(vec![
+                    Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Skipped: Dependencies not met", Style::default().fg(Color::DarkGray)),
+                ]));
+            },
+            _ => {}
+        }
+
+        // Show truncated output if available
         if !result.output.is_empty() {
-            for line in result.output.lines().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled(" │  ├─ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Output:", Style::default().fg(Color::DarkGray)),
+            ]));
+            for (line_idx, line) in result.output.lines().take(2).enumerate() {
+                let connector = if line_idx == 1 && result.output.lines().count() > 2 {
+                    " │  │   └─ [...]"
+                } else {
+                    " │  │      "
+                };
+                let output_line = if line_idx == 1 && result.output.lines().count() > 2 {
+                    format!("{}{}", connector, "")
+                } else {
+                    format!("{}{}", connector, line)
+                };
                 lines.push(Line::from(vec![Span::styled(
-                    format!("      {}", line),
+                    output_line,
                     Style::default().fg(Color::DarkGray),
                 )]));
             }
         }
 
+        // Show error details
         if let NodeStatus::Failed(err) = &result.status {
-            lines.push(Line::from(vec![Span::styled(
-                format!("      Error: {}", err),
-                Style::default().fg(Color::Red),
-            )]));
+            lines.push(Line::from(vec![
+                Span::styled(" │  └─ ", Style::default().fg(Color::Red)),
+                Span::styled(format!("Error: {}", err), Style::default().fg(Color::Red)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(" │", Style::default().fg(Color::DarkGray)),
+            ]));
         }
+    }
 
+    // Add summary at the bottom
+    if !run.node_results.is_empty() {
+        let total_nodes = run.node_results.len();
+        let completed_nodes = run.node_results.iter().filter(|r| !matches!(r.status, NodeStatus::Pending | NodeStatus::Running)).count();
+        let successful_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Success)).count();
+        let failed_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Failed(_))).count();
+        let skipped_nodes = run.node_results.iter().filter(|r| matches!(r.status, NodeStatus::Skipped)).count();
+        
         lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" └─ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Graph Summary:", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("    Progress: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}/{} nodes completed", completed_nodes, total_nodes), Style::default().fg(Color::White)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("    Results:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{} ✔", successful_nodes), Style::default().fg(Color::Green)),
+            Span::styled(format!(" · {} ✘", failed_nodes), Style::default().fg(Color::Red)),
+            Span::styled(format!(" · {} -", skipped_nodes), Style::default().fg(Color::DarkGray)),
+        ]));
     }
 
     lines

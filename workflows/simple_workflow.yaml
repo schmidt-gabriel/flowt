@@ -1,0 +1,13 @@
+name: Simple Test
+description: Manual test workflow
+enabled: true
+triggers:
+  - type: manual
+
+nodes:
+  - id: test-step
+    type: shell
+    cmd: echo "Simple test completed"
+    env: {}
+    depends_on: []
+
