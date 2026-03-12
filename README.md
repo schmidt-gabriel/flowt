@@ -2,13 +2,18 @@
   <img src="https://github.com/user-attachments/assets/d2e7cf57-369d-4249-936d-35197e98fdd9" alt="Flowt Logo" width="200"/>
 </div>
 
-<center>
-<h1>Flowt</h1>
-</center>
+
+# Flowt
+
 
 > **⚠️ Attention: This project is still in development. Features and APIs may change at any time. Use with caution.**
 
 A powerful workflow automation engine built in Rust. Define workflows as YAML files and execute them with a beautiful terminal interface.
+A powerful workflow automation engine built in Rust. Define workflows as YAML files and execute them with a beautiful terminal interface.
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/6de8e05d-c098-4709-8cae-2a61e7317c7d" alt="Flowt Demo GIF" width="500"/>
+</p>
 
 ## Features
 

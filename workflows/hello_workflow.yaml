@@ -3,8 +3,10 @@ description: Initial Checks
 enabled: true
 triggers:
 - type: cron
-  schedule: 0 * * * * *
+  schedule: "0 * * * * *"
+
 nodes:
+
 - id: hello-world
   type: shell
   cmd: echo "Hello, World!"
@@ -12,6 +14,7 @@ nodes:
   when: null
   retry: null
   timeout: null
+
 - id: my-system
   type: shell
   cmd: echo "Running on $(uname -s) with $(uname -r)"
@@ -19,6 +22,7 @@ nodes:
   when: null
   retry: null
   timeout: null
+  
 - id: timestamp
   type: shell
   cmd: date
