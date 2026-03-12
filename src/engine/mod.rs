@@ -78,7 +78,7 @@ impl Engine {
         let mut context: HashMap<String, NodeResult> = HashMap::new();
 
         for node in &workflow.nodes {
-            let result = self.execute_node(node, &context).await;
+            let result = self.execute_node(node, &context, &run.id).await;
             context.insert(node.id.clone(), result.clone());
 
             {
@@ -117,12 +117,13 @@ impl Engine {
         &self,
         node: &NodeConfig,
         _context: &HashMap<String, NodeResult>,
+        run_id: &str,
     ) -> NodeResult {
         let started_at = Utc::now();
 
         let (status, output) = match &node.kind {
             NodeKind::Http { url, method, expect_status, .. } => {
-                run_http(url, method, *expect_status).await
+                run_http(url, method, *expect_status, run_id).await
             }
             NodeKind::Shell { cmd, env } => run_shell(cmd, env).await,
             NodeKind::Slack { webhook_url, message } => {
@@ -141,10 +142,19 @@ impl Engine {
     }
 }
 
-async fn run_http(url: &str, method: &str, expect_status: Option<u16>) -> (NodeStatus, String) {
+async fn run_http(url: &str, method: &str, expect_status: Option<u16>, run_id: &str) -> (NodeStatus, String) {
     let expected = expect_status.unwrap_or(200);
+    
+    // Create .cache directory if it doesn't exist
+    let cache_dir = format!("{}/.cache/flowt", std::env::var("HOME").unwrap_or_default());
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        return (NodeStatus::Failed(format!("Failed to create cache directory: {}", e)), String::new());
+    }
+    
     let cmd = format!(
-        "curl -s -o /tmp/flowt_body -w '%{{http_code}}' -X {} '{}'",
+        "curl -s -o {}/flowt_{} -w '%{{http_code}}' -X {} '{}'",
+        cache_dir,
+        run_id,
         method.to_uppercase(),
         url
     );
@@ -152,9 +162,7 @@ async fn run_http(url: &str, method: &str, expect_status: Option<u16>) -> (NodeS
     match run_shell(&cmd, &HashMap::new()).await {
         (NodeStatus::Success, output) => {
             let status_code: u16 = output.trim().parse().unwrap_or(0);
-            let body = std::fs::read_to_string("/tmp/flowt_body").unwrap_or_default();
-            let preview = &body[..body.len().min(200)];
-            let out = format!("HTTP {} — {}", status_code, preview);
+            let out = format!("HTTP {}", status_code);
 
             if status_code == expected {
                 (NodeStatus::Success, out)

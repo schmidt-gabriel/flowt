@@ -22,6 +22,14 @@ nodes:
   when: null
   retry: null
   timeout: null
+
+- id: fetch-data
+  type: http
+  url: "https://jsonplaceholder.typicode.com/todos/1"
+  method: GET
+  expect_status: 200
+  retry: 3
+  timeout: "30s"
   
 - id: timestamp
   type: shell
