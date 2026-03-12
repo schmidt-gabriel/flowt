@@ -2,11 +2,15 @@
   <img src="https://github.com/user-attachments/assets/d2e7cf57-369d-4249-936d-35197e98fdd9" alt="Flowt Logo" width="200"/>
 </div>
 
-# Flowt
+<center>
+<h1>Flowt</h1>
+</center>
+
+> **⚠️ Attention: This project is still in development. Features and APIs may change at any time. Use with caution.**
 
 A powerful workflow automation engine built in Rust. Define workflows as YAML files and execute them with a beautiful terminal interface.
 
-## ✨ Features
+## Features
 
 - **Fast & Lightweight**: Built in Rust for maximum performance
 - **YAML Configuration**: Simple and readable workflow definitions
@@ -19,12 +23,12 @@ A powerful workflow automation engine built in Rust. Define workflows as YAML fi
 - **Retry Logic**: Automatic retries for failed operations
 - **Timeouts**: Configurable timeouts for long-running tasks
 
-## 🚀 Installation
+## Installation
 
 ### From Source
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/schmidt-gabriel/flowt.git
 cd flowt
 cargo build --release
 ./target/release/flowt --help
@@ -36,7 +40,7 @@ cargo build --release
 cargo install --path .
 ```
 
-## 📖 Usage
+## Usage
 
 ### Commands
 
@@ -72,7 +76,7 @@ flowt tui /path/to/workflows
 
 The TUI provides a real-time view of running workflows, their status, and execution history.
 
-## 📝 Workflow Configuration
+## Workflow Configuration
 
 Workflows are defined using YAML files with the following structure:
 
@@ -113,7 +117,7 @@ nodes:
 
 ### Node Types
 
-#### 🌐 HTTP Requests
+#### HTTP Requests
 ```yaml
 - id: api-call
   type: http
@@ -126,7 +130,7 @@ nodes:
   expect_status: 201
 ```
 
-#### 🖥️ Shell Commands
+#### Shell Commands
 ```yaml
 - id: build-project
   type: shell
@@ -135,15 +139,15 @@ nodes:
     NODE_ENV: "production"
 ```
 
-#### 📱 Slack Notifications
+#### Slack Notifications
 ```yaml
 - id: notify-team
   type: slack
   webhook_url: "${SLACK_WEBHOOK_URL}"
-  message: "Deployment completed successfully! 🚀"
+  message: "Deployment completed successfully!"
 ```
 
-#### 🔍 Logging
+#### Logging
 ```yaml
 - id: log-status
   type: log
@@ -179,7 +183,7 @@ Use environment variables in your workflows:
     KUBECONFIG: "${HOME}/.kube/config"
 ```
 
-## 📁 Directory Structure
+## Directory Structure
 
 ```
 flowt/
@@ -192,7 +196,7 @@ flowt/
 └── Cargo.toml       # Rust dependencies
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Workflow Directory
 
@@ -207,13 +211,13 @@ flowt list /path/to/my/workflows
 
 Flowt supports environment variable substitution in workflow files using the `${VARIABLE_NAME}` syntax.
 
-## 📊 Examples
+## Examples
 
 Check the `workflows/` directory for example workflow configurations:
 
 - **health-check.yaml**: Simple service health check workflow
 
-## 🚧 Development
+## Development
 
 ### Prerequisites
 
@@ -238,7 +242,7 @@ cargo test
 cargo run -- tui
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -248,11 +252,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📜 License
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [Ratatui](https://github.com/ratatui-org/ratatui) for the terminal interface
 - Uses [Tokio](https://tokio.rs) for async runtime
@@ -260,4 +264,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Happy automating! 🎉**
+Happy automating!
