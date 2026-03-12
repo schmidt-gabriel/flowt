@@ -49,7 +49,7 @@ impl App {
                     Span::styled(config.name.clone(), Style::default().fg(Color::White)),
                     Span::styled(
                         format!(" ({})", trigger_type),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::White).add_modifier(Modifier::ITALIC),
                     ),
                 ]))
             })
