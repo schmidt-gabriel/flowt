@@ -69,10 +69,10 @@ flowt list [workflows-directory]
 
 ### TUI Dashboard
 
-Launch the terminal user interface to monitor and manage workflows. This is the default mode:
+Launch the terminal user interface with smart mode detection:
 
 ```bash
-# Default TUI launch
+# Default TUI launch (smart mode: full engine OR UI-only based on service status)
 flowt
 
 # TUI with custom directory
@@ -81,28 +81,53 @@ flowt -d /path/to/workflows
 flowt tui /path/to/workflows
 ```
 
-The TUI provides a real-time view of running workflows, their status, and execution history.
+**Smart Behavior:**
+- **No service running**: TUI acts as full engine with cron scheduling
+- **Service detected**: TUI connects as UI-only interface to existing service
+
+The TUI provides a real-time view of running workflows, their status, execution history, and shows the current mode in the status header.
 
 ### Service Mode
 
-Run Flowt as a background service with terminal-only logging, while connecting multiple TUI instances:
+Flowt supports two deployment patterns, with automatic detection:
+
+#### 1. Standalone TUI (Full Engine)
+When no service is running, TUI acts as a complete workflow engine:
 
 ```bash
-# Terminal 1: Start the service
+flowt          # TUI with full engine - runs cron jobs and automation
+```
+
+**Features:**
+- **Full Engine**: Cron scheduler, workflow automation, and UI in one process
+- **Simple Setup**: Everything in a single command
+- **Complete Monitoring**: Workflows, logs, and scheduling all managed together
+
+#### 2. Service + TUI (Distributed Mode)
+Run as a persistent service with multiple UI connections:
+
+```bash
+# Terminal 1: Start the persistent service
 flowt serve [workflows-directory]
 
-# Terminal 2: Connect TUI to the running service  
+# Terminal 2+: Connect TUI(s) to the running service  
 flowt tui [workflows-directory]  # Automatically detects and connects
 ```
 
-**Service Mode Benefits:**
-- **Persistent Workflow Engine**: Cron jobs and workflows continue running in the background
+**Features:**
+- **Persistent Engine**: Cron jobs and workflows continue running in the background
 - **Multiple TUI Connections**: Connect multiple TUI instances to the same service
 - **Terminal Logs**: Real-time colored logs in the service terminal
 - **Shared State**: All TUI connections share the same workflow runs and history
 - **Graceful Shutdown**: Use Ctrl+C to stop the service cleanly
 
-When a service is running, `flowt tui` automatically connects to it instead of starting a new engine instance.
+#### Smart Mode Detection
+
+The TUI automatically detects which mode to use:
+- ** Connected to Flowt service**: When `flowt serve` is running, TUI connects as UI-only
+- ** TUI Engine Mode**: When no service is running, TUI starts full engine with cron scheduling
+
+This prevents duplicate cron jobs while ensuring automation is always available.
 
 ## Workflow Configuration
 

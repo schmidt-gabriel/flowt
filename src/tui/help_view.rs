@@ -8,11 +8,11 @@ use ratatui::{
 };
 
 impl App {
-    pub fn draw_help_view(&self, f: &mut Frame) {
+    pub fn draw_help_view_with_area(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(f.size());
+            .split(area);
 
         // Build help content
         let help_lines = vec![

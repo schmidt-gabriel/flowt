@@ -10,11 +10,11 @@ use ratatui::{
 use serde_json;
 
 impl App {
-    pub fn draw_node_detail_view(&self, f: &mut Frame) {
+    pub fn draw_node_detail_view_with_area(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-            .split(f.size());
+            .split(area);
 
         // Left panel: Node selector
         self.draw_node_selector(f, chunks[0]);
@@ -23,7 +23,6 @@ impl App {
         self.draw_selected_node_detail(f, chunks[1]);
 
         // Bottom help bar
-        let area = f.size();
         let help_items = if area.width >= 140 {
             vec![
                 " ←/→ switch panel ",

@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 impl App {
-    pub fn draw_workflows_view(&self, f: &mut Frame) {
+    pub fn draw_workflows_view_with_area(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -18,7 +18,7 @@ impl App {
                 Constraint::Percentage(35),
                 Constraint::Percentage(40),
             ])
-            .split(f.size());
+            .split(area);
 
         // First panel: unique workflow names
         let workflows = self.get_unique_workflows();

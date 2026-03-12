@@ -85,7 +85,7 @@ fn set_service_status(is_running: bool) -> Result<()> {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             format!("{}/.flowt/service.lock", home)
         });
-    
+
     if let Some(parent) = std::path::Path::new(&service_file).parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -96,7 +96,7 @@ fn set_service_status(is_running: bool) -> Result<()> {
     } else {
         let _ = std::fs::remove_file(&service_file); // Ignore if file doesn't exist
     }
-    
+
     Ok(())
 }
 
@@ -108,7 +108,7 @@ fn is_service_running() -> bool {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             format!("{}/.flowt/service.lock", home)
         });
-    
+
     if let Ok(pid_str) = std::fs::read_to_string(&service_file) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             // Check if process is still running using cross-platform approach
@@ -123,27 +123,25 @@ fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
         use std::process::Command;
-        
+
         // Use kill -0 to check if process exists without actually killing it
-        let output = Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output();
-        
+        let output = Command::new("kill").args(["-0", &pid.to_string()]).output();
+
         match output {
             Ok(result) => result.status.success(),
             Err(_) => false,
         }
     }
-    
+
     #[cfg(windows)]
     {
         // Windows implementation using tasklist
         use std::process::Command;
-        
+
         let output = Command::new("tasklist")
             .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV"])
             .output();
-            
+
         match output {
             Ok(result) => {
                 let output_str = String::from_utf8_lossy(&result.stdout);
@@ -414,7 +412,7 @@ async fn main() -> Result<()> {
 
             // Set service status to running
             let _ = set_service_status(true);
-            
+
             println!("Starting Flowt service - monitoring workflows in: {}", dir);
             println!("Logs will be displayed below. Use Ctrl+C to stop.\n");
 
@@ -490,7 +488,7 @@ async fn main() -> Result<()> {
 
             // Setup signal handling for graceful shutdown
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
-            
+
             // Spawn signal handler
             tokio::spawn(async move {
                 let _ = tokio::signal::ctrl_c().await;
@@ -498,7 +496,7 @@ async fn main() -> Result<()> {
                 let _ = shutdown_tx.send(()).await;
             });
 
-            // Log monitoring loop 
+            // Log monitoring loop
             loop {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
@@ -524,7 +522,7 @@ async fn main() -> Result<()> {
                                             // Update logs from database, preserving existing count logic
                                             let current_db_count = historical_logs.len();
                                             let current_memory_count = logs_guard.get(&workflow_name).map_or(0, |logs| logs.len());
-                                            
+
                                             // Only update if database has more entries
                                             if current_db_count > current_memory_count {
                                                 logs_guard.insert(workflow_name.clone(), historical_logs);
@@ -569,29 +567,29 @@ async fn main() -> Result<()> {
         Some(Commands::Tui { dir }) => {
             if is_service_running() {
                 println!("Connecting to running Flowt service...");
-                
+
                 // In service mode: TUI connects to existing service - no engine startup
                 let engine = Arc::new(Engine::new());
                 let _ = engine.load_history();
                 let runs = engine.runs.clone();
-                
+
                 // Create shared logs and load from database only
                 let logs = Arc::new(Mutex::new(HashMap::new()));
                 load_historical_logs(&logs);
-                
+
                 // Add connection log entry
                 log_to_persistent_storage(
                     &logs,
-                    "System", 
+                    "System",
                     LogLevel::Info,
                     &format!("TUI connected to running service - workflows in: {}", dir),
                 );
 
                 let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
-                
+
                 // Set service mode flag to prevent duplicate scheduling
                 app.service_mode = true;
-                
+
                 loop {
                     app.run()?;
 
@@ -613,7 +611,7 @@ async fn main() -> Result<()> {
                     }
                 }
             } else {
-                // No service running: start TUI with full engine (original behavior)
+                // No service running: TUI acts as full engine with cron scheduling
                 let engine = Arc::new(Engine::new());
 
                 // Load historical runs from database
@@ -632,12 +630,16 @@ async fn main() -> Result<()> {
                     &logs,
                     "System",
                     LogLevel::Info,
-                    &format!("Flowt started - monitoring workflows in: {}", dir),
+                    &format!(
+                        "TUI started with full engine - monitoring workflows in: {}",
+                        dir
+                    ),
                 );
 
-                let workflows = WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
+                let workflows =
+                    WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
 
-                // Start cron scheduler in background
+                // Start cron scheduler in background (TUI acts as full engine)
                 let engine_cron = engine.clone();
                 let dir_cron = dir.clone();
                 let logs_cron = logs.clone();
@@ -708,29 +710,32 @@ async fn main() -> Result<()> {
         None => {
             if is_service_running() {
                 println!("🔗 Connecting to running Flowt service...");
-                
+
                 // In service mode: TUI connects to existing service - no engine startup
                 let engine = Arc::new(Engine::new());
                 let _ = engine.load_history();
                 let runs = engine.runs.clone();
-                
+
                 // Create shared logs and load from database only
                 let logs = Arc::new(Mutex::new(HashMap::new()));
                 load_historical_logs(&logs);
-                
+
                 // Add connection log entry
                 log_to_persistent_storage(
                     &logs,
                     "System",
                     LogLevel::Info,
-                    &format!("TUI connected to running service - workflows in: {}", cli.dir),
+                    &format!(
+                        "TUI connected to running service - workflows in: {}",
+                        cli.dir
+                    ),
                 );
 
                 let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
-                
+
                 // Set service mode flag to prevent duplicate scheduling
                 app.service_mode = true;
-                
+
                 loop {
                     app.run()?;
 
@@ -767,18 +772,18 @@ async fn main() -> Result<()> {
                 load_historical_logs(&logs);
 
                 // Add startup log entry
-                if let Ok(mut logs_guard) = logs.try_lock() {
-                    let system_logs = logs_guard
-                        .entry("System".to_string())
-                        .or_insert_with(Vec::new);
-                    system_logs.push(LogEntry {
-                        timestamp: chrono::Utc::now(),
-                        level: LogLevel::Info,
-                        message: format!("Flowt started - monitoring workflows in: {}", cli.dir),
-                    });
-                }
+                // Add startup log entry
+                log_to_persistent_storage(
+                    &logs,
+                    "System",
+                    LogLevel::Info,
+                    &format!(
+                        "TUI started with full engine - monitoring workflows in: {}",
+                        cli.dir
+                    ),
+                );
 
-                // Start cron scheduler in background
+                // Start cron scheduler in background (TUI acts as full engine when no service running)
                 let engine_cron = engine.clone();
                 let dir_cron = cli.dir.clone();
                 let logs_cron = logs.clone();

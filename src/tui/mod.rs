@@ -75,7 +75,7 @@ pub struct App {
     pub selected_node: usize,
     pub node_detail_focused_panel: NodeDetailPanel,
     pub edit_requested: Option<String>, // Path to file to edit
-    pub service_mode: bool, // Whether TUI is connected to a running service
+    pub service_mode: bool,             // Whether TUI is connected to a running service
 }
 
 #[derive(PartialEq)]
@@ -450,13 +450,58 @@ impl App {
     }
 
     fn draw_layout(&self, f: &mut ratatui::Frame) {
+        // Create layout with header for service status
+        let layout = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([
+                ratatui::layout::Constraint::Length(1), // Header line
+                ratatui::layout::Constraint::Min(0),    // Main content
+            ])
+            .split(f.size());
+
+        // Draw service status header
+        self.draw_service_status_header(f, layout[0]);
+
+        // Draw the main view in the remaining area
         match self.current_view {
-            AppView::Workflows => self.draw_workflows_view(f),
-            AppView::Logs => self.draw_logs_view(f),
-            AppView::Description => self.draw_description_view(f),
-            AppView::Help => self.draw_help_view(f),
-            AppView::NodeDetail => self.draw_node_detail_view(f),
+            AppView::Workflows => self.draw_workflows_view_with_area(f, layout[1]),
+            AppView::Logs => self.draw_logs_view_with_area(f, layout[1]),
+            AppView::Description => self.draw_description_view_with_area(f, layout[1]),
+            AppView::Help => self.draw_help_view_with_area(f, layout[1]),
+            AppView::NodeDetail => self.draw_node_detail_view_with_area(f, layout[1]),
         }
+    }
+
+    fn draw_service_status_header(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::Paragraph;
+
+        let status_line = if self.service_mode {
+            Line::from(vec![
+                Span::styled("🔗 ", Style::default().fg(Color::Green)),
+                Span::styled(
+                    "Connected to Flowt service",
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    " • Cron jobs running in background",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("⚡ ", Style::default().fg(Color::Cyan)),
+                Span::styled("TUI Engine Mode", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    " • Cron scheduler active in this session",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        };
+
+        let header = Paragraph::new(vec![status_line]);
+        f.render_widget(header, area);
     }
 
     pub fn log_info(&self, workflow_name: &str, message: String) {

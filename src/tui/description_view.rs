@@ -9,11 +9,11 @@ use ratatui::{
 };
 
 impl App {
-    pub fn draw_description_view(&self, f: &mut Frame) {
+    pub fn draw_description_view_with_area(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(f.size());
+            .split(area);
 
         // Get the currently selected workflow
         let workflows = self.get_unique_workflows();
