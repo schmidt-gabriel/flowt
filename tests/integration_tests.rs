@@ -9,9 +9,14 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn test_complete_workflow_lifecycle() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Use a unique test ID to avoid conflicts
+    let test_id = format!("test_{}", std::process::id());
+    let flowt_dir = temp_dir.path().join(&test_id);
+    std::fs::create_dir_all(&flowt_dir).unwrap();
 
     // Set up test environment
-    std::env::set_var("FLOWT_DIR", temp_dir.path().to_str().unwrap());
+    std::env::set_var("FLOWT_DIR", flowt_dir.to_str().unwrap());
 
     // Create a workflow configuration file
     let workflow_yaml = r#"
@@ -95,7 +100,13 @@ nodes:
 #[tokio::test]
 async fn test_workflow_with_http_node() {
     let temp_dir = TempDir::new().unwrap();
-    std::env::set_var("FLOWT_DIR", temp_dir.path().to_str().unwrap());
+    
+    // Use a unique test ID to avoid conflicts  
+    let test_id = format!("test_http_{}", std::process::id());
+    let flowt_dir = temp_dir.path().join(&test_id);
+    std::fs::create_dir_all(&flowt_dir).unwrap();
+    
+    std::env::set_var("FLOWT_DIR", flowt_dir.to_str().unwrap());
 
     let workflow = WorkflowConfig {
         name: "http_test_workflow".to_string(),
@@ -239,7 +250,13 @@ nodes:
 #[tokio::test]
 async fn test_engine_with_storage_persistence() {
     let temp_dir = TempDir::new().unwrap();
-    std::env::set_var("FLOWT_DIR", temp_dir.path().to_str().unwrap());
+    
+    // Use a unique test ID to avoid conflicts
+    let test_id = format!("test_storage_{}", std::process::id());
+    let flowt_dir = temp_dir.path().join(&test_id);
+    std::fs::create_dir_all(&flowt_dir).unwrap();
+    
+    std::env::set_var("FLOWT_DIR", flowt_dir.to_str().unwrap());
 
     let engine = Engine::new();
 
@@ -353,5 +370,119 @@ fn test_workflow_serialization_roundtrip() {
         assert_eq!(orig_node.retry, deser_node.retry);
         assert_eq!(orig_node.timeout, deser_node.timeout);
         assert_eq!(orig_node.depends_on, deser_node.depends_on);
+    }
+}
+
+#[tokio::test]
+async fn test_service_lock_prevents_multiple_instances() {
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_id = format!("service_test_{}", std::process::id());
+    let flowt_dir = temp_dir.path().join(&test_id);
+    std::fs::create_dir_all(&flowt_dir).unwrap();
+
+    // Create a simple workflow for testing
+    let workflow_yaml = r#"
+name: test_simple
+description: "Test workflow"
+enabled: true
+triggers:
+  - type: manual
+nodes:
+  - id: test
+    type: shell
+    cmd: "echo 'test'"
+"#;
+
+    let workflows_dir = flowt_dir.join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    let workflow_path = workflows_dir.join("test.yaml");
+    std::fs::write(&workflow_path, workflow_yaml).unwrap();
+
+    // Build the project first to ensure binary is available
+    let build_output = Command::new("cargo")
+        .args(["build", "--bin", "flowt"])
+        .current_dir(std::env::current_dir().unwrap())
+        .output()
+        .expect("Failed to build flowt binary");
+
+    if !build_output.status.success() {
+        panic!(
+            "Failed to build flowt binary: {}",
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+    }
+
+    let binary_path = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join("flowt");
+
+    // Start the first service instance
+    let mut first_service = Command::new(&binary_path)
+        .args(["serve", workflows_dir.to_str().unwrap()])
+        .env("FLOWT_DIR", &flowt_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start first service");
+
+    // Wait a moment for the first service to start and create lock file
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    // Try to start a second service instance - this should fail
+    let second_service_result = Command::new(&binary_path)
+        .args(["serve", workflows_dir.to_str().unwrap()])
+        .env("FLOWT_DIR", &flowt_dir)
+        .output()
+        .expect("Failed to execute second service command");
+
+    // The second instance should fail with an error about service already running
+    assert!(
+        !second_service_result.status.success(),
+        "Second service instance should fail when first is already running"
+    );
+
+    let stderr = String::from_utf8_lossy(&second_service_result.stderr);
+    assert!(
+        stderr.contains("already running") || stderr.contains("is already running"),
+        "Error message should indicate service is already running. Got: {}",
+        stderr
+    );
+
+    // Clean up: kill the first service
+    first_service.kill().expect("Failed to kill first service");
+    let _ = first_service.wait();
+
+    // Wait a moment for cleanup
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify that after killing the first service, we can start a new one
+    let third_service_result = Command::new(&binary_path)
+        .args(["serve", workflows_dir.to_str().unwrap()])
+        .env("FLOWT_DIR", &flowt_dir)
+        .env("RUST_LOG", "error") // Reduce log output for test
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match third_service_result {
+        Ok(mut child) => {
+            // Wait a moment to let it start
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            
+            // Kill it to clean up
+            child.kill().expect("Failed to kill third service");
+            let _ = child.wait();
+        }
+        Err(e) => {
+            panic!("Should be able to start service after first one was killed: {}", e);
+        }
     }
 }

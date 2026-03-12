@@ -77,6 +77,83 @@ fn load_historical_logs(logs: &SharedLogs) {
     }
 }
 
+// Helper function to set service status
+fn set_service_status(is_running: bool) -> Result<()> {
+    let service_file = std::env::var("FLOWT_DIR")
+        .map(|dir| format!("{}/service.lock", dir))
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.flowt/service.lock", home)
+        });
+    
+    if let Some(parent) = std::path::Path::new(&service_file).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if is_running {
+        let pid = std::process::id();
+        std::fs::write(&service_file, format!("{}", pid))?;
+    } else {
+        let _ = std::fs::remove_file(&service_file); // Ignore if file doesn't exist
+    }
+    
+    Ok(())
+}
+
+// Helper function to check if service is running
+fn is_service_running() -> bool {
+    let service_file = std::env::var("FLOWT_DIR")
+        .map(|dir| format!("{}/service.lock", dir))
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.flowt/service.lock", home)
+        });
+    
+    if let Ok(pid_str) = std::fs::read_to_string(&service_file) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            // Check if process is still running using cross-platform approach
+            return is_process_running(pid);
+        }
+    }
+    false
+}
+
+// Helper function to check if a process ID is running (cross-platform)
+fn is_process_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        
+        // Use kill -0 to check if process exists without actually killing it
+        let output = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output();
+        
+        match output {
+            Ok(result) => result.status.success(),
+            Err(_) => false,
+        }
+    }
+    
+    #[cfg(windows)]
+    {
+        // Windows implementation using tasklist
+        use std::process::Command;
+        
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV"])
+            .output();
+            
+        match output {
+            Ok(result) => {
+                let output_str = String::from_utf8_lossy(&result.stdout);
+                output_str.lines().count() > 1 // More than just the header line
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: SharedLogs) {
     let mut last_execution_times: HashMap<String, DateTime<Utc>> = HashMap::new();
 
@@ -232,6 +309,12 @@ enum Commands {
         #[arg(default_value_t = default_workflows_dir())]
         dir: String,
     },
+    /// Start the workflow service in terminal mode (logs only)
+    Serve {
+        /// Directory containing workflow YAML files
+        #[arg(default_value_t = default_workflows_dir())]
+        dir: String,
+    },
     /// List workflows in a directory
     List {
         #[arg(default_value_t = default_workflows_dir())]
@@ -249,6 +332,7 @@ async fn main() -> Result<()> {
     // Create workflows directory if it doesn't exist (when using default TUI mode)
     let workflows_dir = match &cli.command {
         Some(Commands::Tui { dir }) => dir,
+        Some(Commands::Serve { dir }) => dir,
         Some(Commands::List { dir }) => dir,
         None => &cli.dir,
         _ => &cli.dir,
@@ -320,13 +404,24 @@ async fn main() -> Result<()> {
             }
         }
 
-        Some(Commands::Tui { dir }) => {
+        Some(Commands::Serve { dir }) => {
+            // Check if service is already running
+            if is_service_running() {
+                return Err(anyhow::anyhow!(
+                    "Flowt service is already running. Stop it first or use 'flowt tui' to connect to the running service."
+                ));
+            }
+
+            // Set service status to running
+            let _ = set_service_status(true);
+            
+            println!("Starting Flowt service - monitoring workflows in: {}", dir);
+            println!("Logs will be displayed below. Use Ctrl+C to stop.\n");
+
             let engine = Arc::new(Engine::new());
 
             // Load historical runs from database
             let _ = engine.load_history();
-
-            let runs = engine.runs.clone();
 
             // Create shared logs
             let logs = Arc::new(Mutex::new(HashMap::new()));
@@ -339,7 +434,7 @@ async fn main() -> Result<()> {
                 &logs,
                 "System",
                 LogLevel::Info,
-                &format!("Flowt started - monitoring workflows in: {}", dir),
+                &format!("Flowt service started - monitoring workflows in: {}", dir),
             );
 
             let workflows = WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
@@ -386,88 +481,334 @@ async fn main() -> Result<()> {
                     LogLevel::Info,
                     &format!("Started {} workflows automatically", auto_run_count),
                 );
+                println!("✔ Started {} workflows automatically", auto_run_count);
             }
 
-            let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
+            // Start log monitoring task to display logs in terminal
+            let logs_monitor = logs.clone();
+            let mut last_log_count = HashMap::<String, usize>::new();
+
+            // Setup signal handling for graceful shutdown
+            let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+            
+            // Spawn signal handler
+            tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                println!("\nReceived shutdown signal, stopping service...");
+                let _ = shutdown_tx.send(()).await;
+            });
+
+            // Log monitoring loop 
             loop {
-                app.run()?;
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        // Clean up service status
+                        let _ = set_service_status(false);
+                        println!("Flowt service stopped");
+                        break;
+                    },
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                        // Periodically reload logs from database to catch TUI-triggered workflows
+                        if let Ok(history) = StorageService::new() {
+                            if let Ok(recent_runs) = history.get_recent_workflow_runs(Some(50)) {
+                                let workflow_names: std::collections::HashSet<String> = recent_runs
+                                    .iter()
+                                    .map(|r| r.workflow_name.clone())
+                                    .collect();
 
-                // Check if edit was requested
-                if let Some(file_path) = app.edit_requested.clone() {
-                    // Exit TUI cleanly
-                    disable_raw_mode()?;
-                    execute!(std::io::stdout(), LeaveAlternateScreen)?;
+                                if let Ok(mut logs_guard) = logs_monitor.try_lock() {
+                                    for workflow_name in workflow_names {
+                                        if let Ok(historical_logs) =
+                                            history.get_logs_for_workflow(&workflow_name, Some(100))
+                                        {
+                                            // Update logs from database, preserving existing count logic
+                                            let current_db_count = historical_logs.len();
+                                            let current_memory_count = logs_guard.get(&workflow_name).map_or(0, |logs| logs.len());
+                                            
+                                            // Only update if database has more entries
+                                            if current_db_count > current_memory_count {
+                                                logs_guard.insert(workflow_name.clone(), historical_logs);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
-                    // Edit the file
-                    tui::App::edit_workflow_external(&file_path);
+                        // Display new logs
+                        if let Ok(logs_guard) = logs_monitor.try_lock() {
+                            for (workflow_name, workflow_logs) in logs_guard.iter() {
+                                let current_count = workflow_logs.len();
+                                let last_count = last_log_count.get(workflow_name).unwrap_or(&0);
 
-                    // Reset edit request and restart TUI
-                    app.edit_requested = None;
-                    enable_raw_mode()?;
-                    execute!(std::io::stdout(), EnterAlternateScreen)?;
-                } else {
-                    break; // Normal exit
+                                if current_count > *last_count {
+                                    // Display new log entries
+                                    for log_entry in workflow_logs.iter().skip(*last_count) {
+                                        let level_color = match log_entry.level {
+                                            LogLevel::Info => "\x1b[36m",    // Cyan
+                                            LogLevel::Warning => "\x1b[33m",    // Yellow
+                                            LogLevel::Error => "\x1b[31m",   // Red
+                                        };
+                                        println!(
+                                            "{}[{}]\x1b[0m \x1b[90m{}\x1b[0m {}",
+                                            level_color,
+                                            workflow_name,
+                                            log_entry.timestamp.format("%H:%M:%S"),
+                                            log_entry.message
+                                        );
+                                    }
+                                    last_log_count.insert(workflow_name.clone(), current_count);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Some(Commands::Tui { dir }) => {
+            if is_service_running() {
+                println!("Connecting to running Flowt service...");
+                
+                // In service mode: TUI connects to existing service - no engine startup
+                let engine = Arc::new(Engine::new());
+                let _ = engine.load_history();
+                let runs = engine.runs.clone();
+                
+                // Create shared logs and load from database only
+                let logs = Arc::new(Mutex::new(HashMap::new()));
+                load_historical_logs(&logs);
+                
+                // Add connection log entry
+                log_to_persistent_storage(
+                    &logs,
+                    "System", 
+                    LogLevel::Info,
+                    &format!("TUI connected to running service - workflows in: {}", dir),
+                );
+
+                let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
+                
+                // Set service mode flag to prevent duplicate scheduling
+                app.service_mode = true;
+                
+                loop {
+                    app.run()?;
+
+                    // Check if edit was requested
+                    if let Some(file_path) = app.edit_requested.clone() {
+                        // Exit TUI cleanly
+                        disable_raw_mode()?;
+                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+                        // Edit the file
+                        tui::App::edit_workflow_external(&file_path);
+
+                        // Reset edit request and restart TUI
+                        app.edit_requested = None;
+                        enable_raw_mode()?;
+                        execute!(std::io::stdout(), EnterAlternateScreen)?;
+                    } else {
+                        break; // Normal exit
+                    }
+                }
+            } else {
+                // No service running: start TUI with full engine (original behavior)
+                let engine = Arc::new(Engine::new());
+
+                // Load historical runs from database
+                let _ = engine.load_history();
+
+                let runs = engine.runs.clone();
+
+                // Create shared logs
+                let logs = Arc::new(Mutex::new(HashMap::new()));
+
+                // Load historical logs from database
+                load_historical_logs(&logs);
+
+                // Add startup log entry
+                log_to_persistent_storage(
+                    &logs,
+                    "System",
+                    LogLevel::Info,
+                    &format!("Flowt started - monitoring workflows in: {}", dir),
+                );
+
+                let workflows = WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
+
+                // Start cron scheduler in background
+                let engine_cron = engine.clone();
+                let dir_cron = dir.clone();
+                let logs_cron = logs.clone();
+                tokio::spawn(async move {
+                    start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
+                });
+
+                // Run all enabled manual-trigger workflows in background
+                let mut auto_run_count = 0;
+                for wf in workflows {
+                    if wf.enabled {
+                        // Only auto-run workflows with manual triggers
+                        let has_manual_trigger = wf
+                            .triggers
+                            .iter()
+                            .any(|t| matches!(t, TriggerConfig::Manual));
+                        if has_manual_trigger {
+                            auto_run_count += 1;
+                            let workflow_name = wf.name.clone();
+                            let engine_clone = engine.clone();
+                            let logs_clone = logs.clone();
+                            tokio::spawn(async move {
+                                log_to_persistent_storage(
+                                    &logs_clone,
+                                    &workflow_name,
+                                    LogLevel::Info,
+                                    &format!("Auto-starting workflow: {}", workflow_name),
+                                );
+                                let _ = engine_clone.run_workflow(&wf).await;
+                            });
+                        }
+                    }
+                }
+
+                if auto_run_count > 0 {
+                    log_to_persistent_storage(
+                        &logs,
+                        "System",
+                        LogLevel::Info,
+                        &format!("Started {} workflows automatically", auto_run_count),
+                    );
+                }
+
+                let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
+                loop {
+                    app.run()?;
+
+                    // Check if edit was requested
+                    if let Some(file_path) = app.edit_requested.clone() {
+                        // Exit TUI cleanly
+                        disable_raw_mode()?;
+                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+                        // Edit the file
+                        tui::App::edit_workflow_external(&file_path);
+
+                        // Reset edit request and restart TUI
+                        app.edit_requested = None;
+                        enable_raw_mode()?;
+                        execute!(std::io::stdout(), EnterAlternateScreen)?;
+                    } else {
+                        break; // Normal exit
+                    }
                 }
             }
         }
 
         None => {
-            // Default to TUI mode with the default directory
-            let engine = Arc::new(Engine::new());
+            if is_service_running() {
+                println!("🔗 Connecting to running Flowt service...");
+                
+                // In service mode: TUI connects to existing service - no engine startup
+                let engine = Arc::new(Engine::new());
+                let _ = engine.load_history();
+                let runs = engine.runs.clone();
+                
+                // Create shared logs and load from database only
+                let logs = Arc::new(Mutex::new(HashMap::new()));
+                load_historical_logs(&logs);
+                
+                // Add connection log entry
+                log_to_persistent_storage(
+                    &logs,
+                    "System",
+                    LogLevel::Info,
+                    &format!("TUI connected to running service - workflows in: {}", cli.dir),
+                );
 
-            // Load historical runs from database
-            let _ = engine.load_history();
+                let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
+                
+                // Set service mode flag to prevent duplicate scheduling
+                app.service_mode = true;
+                
+                loop {
+                    app.run()?;
 
-            let runs = engine.runs.clone();
+                    // Check if edit was requested
+                    if let Some(file_path) = app.edit_requested.clone() {
+                        // Exit TUI cleanly
+                        disable_raw_mode()?;
+                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
 
-            // Create shared logs
-            let logs = Arc::new(Mutex::new(HashMap::new()));
+                        // Edit the file
+                        tui::App::edit_workflow_external(&file_path);
 
-            // Load historical logs from database
-            load_historical_logs(&logs);
+                        // Reset edit request and restart TUI
+                        app.edit_requested = None;
+                        enable_raw_mode()?;
+                        execute!(std::io::stdout(), EnterAlternateScreen)?;
+                    } else {
+                        break; // Normal exit
+                    }
+                }
+            } else {
+                // Default to TUI mode with the default directory (original behavior)
+                let engine = Arc::new(Engine::new());
 
-            // Add startup log entry
-            if let Ok(mut logs_guard) = logs.try_lock() {
-                let system_logs = logs_guard
-                    .entry("System".to_string())
-                    .or_insert_with(Vec::new);
-                system_logs.push(LogEntry {
-                    timestamp: chrono::Utc::now(),
-                    level: LogLevel::Info,
-                    message: format!("Flowt started - monitoring workflows in: {}", cli.dir),
+                // Load historical runs from database
+                let _ = engine.load_history();
+
+                let runs = engine.runs.clone();
+
+                // Create shared logs
+                let logs = Arc::new(Mutex::new(HashMap::new()));
+
+                // Load historical logs from database
+                load_historical_logs(&logs);
+
+                // Add startup log entry
+                if let Ok(mut logs_guard) = logs.try_lock() {
+                    let system_logs = logs_guard
+                        .entry("System".to_string())
+                        .or_insert_with(Vec::new);
+                    system_logs.push(LogEntry {
+                        timestamp: chrono::Utc::now(),
+                        level: LogLevel::Info,
+                        message: format!("Flowt started - monitoring workflows in: {}", cli.dir),
+                    });
+                }
+
+                // Start cron scheduler in background
+                let engine_cron = engine.clone();
+                let dir_cron = cli.dir.clone();
+                let logs_cron = logs.clone();
+                tokio::spawn(async move {
+                    start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
                 });
-            }
 
-            // Start cron scheduler in background
-            let engine_cron = engine.clone();
-            let dir_cron = cli.dir.clone();
-            let logs_cron = logs.clone();
-            tokio::spawn(async move {
-                start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
-            });
+                // Manual workflows are triggered explicitly through the TUI interface
+                // No auto-execution of manual workflows at startup
 
-            // Manual workflows are triggered explicitly through the TUI interface
-            // No auto-execution of manual workflows at startup
+                let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
+                loop {
+                    app.run()?;
 
-            let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
-            loop {
-                app.run()?;
+                    // Check if edit was requested
+                    if let Some(file_path) = app.edit_requested.clone() {
+                        // Exit TUI cleanly
+                        disable_raw_mode()?;
+                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
 
-                // Check if edit was requested
-                if let Some(file_path) = app.edit_requested.clone() {
-                    // Exit TUI cleanly
-                    disable_raw_mode()?;
-                    execute!(std::io::stdout(), LeaveAlternateScreen)?;
+                        // Edit the file
+                        tui::App::edit_workflow_external(&file_path);
 
-                    // Edit the file
-                    tui::App::edit_workflow_external(&file_path);
-
-                    // Reset edit request and restart TUI
-                    app.edit_requested = None;
-                    enable_raw_mode()?;
-                    execute!(std::io::stdout(), EnterAlternateScreen)?;
-                } else {
-                    break; // Normal exit
+                        // Reset edit request and restart TUI
+                        app.edit_requested = None;
+                        enable_raw_mode()?;
+                        execute!(std::io::stdout(), EnterAlternateScreen)?;
+                    } else {
+                        break; // Normal exit
+                    }
                 }
             }
         }

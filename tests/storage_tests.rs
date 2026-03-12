@@ -14,18 +14,15 @@ fn create_test_storage() -> (StorageService, TempDir) {
         .unwrap()
         .as_nanos();
 
-    // Set environment variable to use test database with unique path
-    std::env::set_var(
-        "FLOWT_DIR",
-        format!(
-            "{}/test_{:?}_{}",
-            temp_dir.path().to_str().unwrap(),
-            test_id,
-            timestamp
-        ),
+    // Create unique database path without relying on global environment variables
+    let db_path = format!(
+        "{}/test_{:?}_{}/flowt_storage.db",
+        temp_dir.path().to_str().unwrap(),
+        test_id,
+        timestamp
     );
 
-    let storage = StorageService::new().unwrap();
+    let storage = StorageService::new_with_path(&db_path).unwrap();
     (storage, temp_dir)
 }
 

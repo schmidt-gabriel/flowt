@@ -50,7 +50,10 @@ pub struct ApiResponse {
 impl StorageService {
     pub fn new() -> Result<Self> {
         let db_path = Self::get_db_path()?;
+        Self::new_with_path(&db_path)
+    }
 
+    pub fn new_with_path(db_path: &str) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = std::path::Path::new(&db_path).parent() {
             std::fs::create_dir_all(parent)?;

@@ -75,6 +75,7 @@ pub struct App {
     pub selected_node: usize,
     pub node_detail_focused_panel: NodeDetailPanel,
     pub edit_requested: Option<String>, // Path to file to edit
+    pub service_mode: bool, // Whether TUI is connected to a running service
 }
 
 #[derive(PartialEq)]
@@ -120,6 +121,7 @@ impl App {
             selected_node: 0,
             node_detail_focused_panel: NodeDetailPanel::NodeList,
             edit_requested: None,
+            service_mode: false,
         }
     }
 
@@ -644,7 +646,7 @@ impl App {
                                         timestamp: chrono::Utc::now(),
                                         level: crate::tui::LogLevel::Info,
                                         message: format!(
-                                            "✓ Manual workflow completed successfully: {}",
+                                            "Manual workflow completed successfully: {}",
                                             workflow_name
                                         ),
                                     });

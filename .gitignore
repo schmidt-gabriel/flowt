@@ -52,6 +52,7 @@ coverage/
 *.flowt.tmp
 /tmp/
 flowt_body
+service.lock
 
 # Backup files
 *.bak

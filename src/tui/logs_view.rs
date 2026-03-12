@@ -40,9 +40,9 @@ impl App {
                     .to_string();
 
                 let (icon, color) = match log.level {
-                    LogLevel::Info => ("ℹ", Color::Blue),
-                    LogLevel::Warning => ("⚠", Color::Yellow),
-                    LogLevel::Error => ("✘", Color::Red),
+                    LogLevel::Info => ("INFO", Color::Blue),
+                    LogLevel::Warning => ("WARN", Color::Yellow),
+                    LogLevel::Error => ("ERROR", Color::Red),
                 };
 
                 Line::from(vec![
