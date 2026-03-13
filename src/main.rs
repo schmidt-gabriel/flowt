@@ -1,5 +1,6 @@
 mod config;
 mod engine;
+mod lock;
 mod storage;
 mod tui;
 
@@ -77,80 +78,6 @@ fn load_historical_logs(logs: &SharedLogs) {
     }
 }
 
-// Helper function to set service status
-fn set_service_status(is_running: bool) -> Result<()> {
-    let service_file = std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/service.lock", dir))
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/service.lock", home)
-        });
-
-    if let Some(parent) = std::path::Path::new(&service_file).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    if is_running {
-        let pid = std::process::id();
-        std::fs::write(&service_file, format!("{}", pid))?;
-    } else {
-        let _ = std::fs::remove_file(&service_file); // Ignore if file doesn't exist
-    }
-
-    Ok(())
-}
-
-// Helper function to check if service is running
-fn is_service_running() -> bool {
-    let service_file = std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/service.lock", dir))
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/service.lock", home)
-        });
-
-    if let Ok(pid_str) = std::fs::read_to_string(&service_file) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            // Check if process is still running using cross-platform approach
-            return is_process_running(pid);
-        }
-    }
-    false
-}
-
-// Helper function to check if a process ID is running (cross-platform)
-fn is_process_running(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-
-        // Use kill -0 to check if process exists without actually killing it
-        let output = Command::new("kill").args(["-0", &pid.to_string()]).output();
-
-        match output {
-            Ok(result) => result.status.success(),
-            Err(_) => false,
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        // Windows implementation using tasklist
-        use std::process::Command;
-
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV"])
-            .output();
-
-        match output {
-            Ok(result) => {
-                let output_str = String::from_utf8_lossy(&result.stdout);
-                output_str.lines().count() > 1 // More than just the header line
-            }
-            Err(_) => false,
-        }
-    }
-}
 
 async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: SharedLogs) {
     let mut last_execution_times: HashMap<String, DateTime<Utc>> = HashMap::new();
@@ -404,14 +331,14 @@ async fn main() -> Result<()> {
 
         Some(Commands::Serve { dir }) => {
             // Check if service is already running
-            if is_service_running() {
+            if lock::is_engine_running() {
                 return Err(anyhow::anyhow!(
                     "Flowt service is already running. Stop it first or use 'flowt tui' to connect to the running service."
                 ));
             }
 
             // Set service status to running
-            let _ = set_service_status(true);
+            let _ = lock::set_engine_status(true);
 
             println!("Starting Flowt service - monitoring workflows in: {}", dir);
             println!("Logs will be displayed below. Use Ctrl+C to stop.\n");
@@ -501,7 +428,7 @@ async fn main() -> Result<()> {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
                         // Clean up service status
-                        let _ = set_service_status(false);
+                        let _ = lock::set_engine_status(false);
                         println!("Flowt service stopped");
                         break;
                     },
@@ -565,7 +492,7 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Tui { dir }) => {
-            if is_service_running() {
+            if lock::is_engine_running() {
                 println!("Connecting to running Flowt service...");
 
                 // In service mode: TUI connects to existing service - no engine startup
@@ -593,8 +520,18 @@ async fn main() -> Result<()> {
                 loop {
                     app.run()?;
 
-                    // Check if edit was requested
-                    if let Some(file_path) = app.edit_requested.clone() {
+                    if app.engine_takeover_requested {
+                        // Engine died — this TUI claims the engine role
+                        app.engine_takeover_requested = false;
+                        app.service_mode = false;
+                        let engine_cron = engine.clone();
+                        let dir_cron = dir.clone();
+                        let logs_cron = logs.clone();
+                        tokio::spawn(async move {
+                            start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
+                        });
+                        // Continue loop — TUI restarts as full engine
+                    } else if let Some(file_path) = app.edit_requested.clone() {
                         // Exit TUI cleanly
                         disable_raw_mode()?;
                         execute!(std::io::stdout(), LeaveAlternateScreen)?;
@@ -610,8 +547,16 @@ async fn main() -> Result<()> {
                         break; // Normal exit
                     }
                 }
+
+                // Release engine lock if this TUI took over as engine
+                if !app.service_mode {
+                    let _ = lock::set_engine_status(false);
+                }
             } else {
                 // No service running: TUI acts as full engine with cron scheduling
+                // Claim the engine lock so other TUI instances start as UI-only
+                let _ = lock::set_engine_status(true);
+
                 let engine = Arc::new(Engine::new());
 
                 // Load historical runs from database
@@ -704,11 +649,14 @@ async fn main() -> Result<()> {
                         break; // Normal exit
                     }
                 }
+
+                // Release engine lock on exit
+                let _ = lock::set_engine_status(false);
             }
         }
 
         None => {
-            if is_service_running() {
+            if lock::is_engine_running() {
                 println!("🔗 Connecting to running Flowt service...");
 
                 // In service mode: TUI connects to existing service - no engine startup
@@ -739,8 +687,18 @@ async fn main() -> Result<()> {
                 loop {
                     app.run()?;
 
-                    // Check if edit was requested
-                    if let Some(file_path) = app.edit_requested.clone() {
+                    if app.engine_takeover_requested {
+                        // Engine died — this TUI claims the engine role
+                        app.engine_takeover_requested = false;
+                        app.service_mode = false;
+                        let engine_cron = engine.clone();
+                        let dir_cron = cli.dir.clone();
+                        let logs_cron = logs.clone();
+                        tokio::spawn(async move {
+                            start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
+                        });
+                        // Continue loop — TUI restarts as full engine
+                    } else if let Some(file_path) = app.edit_requested.clone() {
                         // Exit TUI cleanly
                         disable_raw_mode()?;
                         execute!(std::io::stdout(), LeaveAlternateScreen)?;
@@ -756,8 +714,16 @@ async fn main() -> Result<()> {
                         break; // Normal exit
                     }
                 }
+
+                // Release engine lock if this TUI took over as engine
+                if !app.service_mode {
+                    let _ = lock::set_engine_status(false);
+                }
             } else {
                 // Default to TUI mode with the default directory (original behavior)
+                // Claim the engine lock so other TUI instances start as UI-only
+                let _ = lock::set_engine_status(true);
+
                 let engine = Arc::new(Engine::new());
 
                 // Load historical runs from database
@@ -815,6 +781,9 @@ async fn main() -> Result<()> {
                         break; // Normal exit
                     }
                 }
+
+                // Release engine lock on exit
+                let _ = lock::set_engine_status(false);
             }
         }
     }

@@ -74,8 +74,10 @@ pub struct App {
     pub log_scroll: u16,
     pub selected_node: usize,
     pub node_detail_focused_panel: NodeDetailPanel,
-    pub edit_requested: Option<String>, // Path to file to edit
-    pub service_mode: bool,             // Whether TUI is connected to a running service
+    pub edit_requested: Option<String>,      // Path to file to edit
+    pub service_mode: bool,                  // Whether TUI is connected to a running engine
+    pub engine_takeover_requested: bool,     // Set when engine died and this TUI claimed it
+    last_engine_check: std::time::Instant,   // Throttle liveness polling
 }
 
 #[derive(PartialEq)]
@@ -122,6 +124,8 @@ impl App {
             node_detail_focused_panel: NodeDetailPanel::NodeList,
             edit_requested: None,
             service_mode: false,
+            engine_takeover_requested: false,
+            last_engine_check: std::time::Instant::now(),
         }
     }
 
@@ -423,7 +427,18 @@ impl App {
                     }
                 }
             }
-            // Continue loop to refresh UI even when no events (every 500ms)
+
+            // If running as UI-only, periodically check whether the engine is still alive.
+            // The first TUI to successfully claim the lock becomes the new engine.
+            if self.service_mode
+                && self.last_engine_check.elapsed() >= std::time::Duration::from_secs(2)
+            {
+                self.last_engine_check = std::time::Instant::now();
+                if !crate::lock::is_engine_running() && crate::lock::try_claim_engine() {
+                    self.engine_takeover_requested = true;
+                    break;
+                }
+            }
         }
 
         disable_raw_mode()?;
@@ -485,7 +500,7 @@ impl App {
                     Style::default().fg(Color::Green),
                 ),
                 Span::styled(
-                    " • Cron jobs running in background",
+                    " • Jobs running by other instances",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])
@@ -494,7 +509,7 @@ impl App {
                 Span::styled("⚡ ", Style::default().fg(Color::Cyan)),
                 Span::styled("TUI Engine Mode", Style::default().fg(Color::Cyan)),
                 Span::styled(
-                    " • Cron scheduler active in this session",
+                    " • Jobs active in this session",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])
