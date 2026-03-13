@@ -31,7 +31,7 @@ A powerful workflow automation engine built in Rust. Define workflows as YAML fi
 
 ### Manual Install
 1. Go to the GitHub [releases](https://github.com/schmidt-gabriel/flowt/releases/latest) page
-2. Download the latest non-dSYM build (i.e., `Flowt-X.Y.Z.zip`)
+2. Download the latest non-dSYM build (i.e., `flowt-X.Y.Z.tar.gz` for Linux/macOS or `flowt-X.Y.Z.zip` for Windows)
 3. Unzip the archive
 4. Run the `flowt` binary from the terminal
 
