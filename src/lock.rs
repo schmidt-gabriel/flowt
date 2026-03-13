@@ -1,12 +1,18 @@
 use std::io::Write;
+use std::path::PathBuf;
 
-fn lock_file_path() -> String {
-    std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/service.lock", dir))
+fn lock_file_path() -> PathBuf {
+    let lock_path = std::env::var("FLOWT_DIR")
+        .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/service.lock", home)
-        })
+            dirs::home_dir()
+                .map(|mut home| {
+                    home.push(".flowt");
+                    home
+                })
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+    lock_path.join("service.lock")
 }
 
 /// Write (or remove) the engine lock file with the current process PID.

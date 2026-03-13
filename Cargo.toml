@@ -24,6 +24,7 @@ cron = "0.12"
 dotenv = "0.15"
 regex = "1"
 polodb_core = "4.1"
+dirs = "5.0"
 
 [dev-dependencies]
 tempfile = "3.8"

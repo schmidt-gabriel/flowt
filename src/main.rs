@@ -14,19 +14,25 @@ use crossterm::{
 };
 use engine::Engine;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use storage::StorageService;
 use tui::{LogEntry, LogLevel, SharedLogs};
 
-fn default_workflows_dir() -> String {
+fn default_workflows_dir() -> PathBuf {
     std::env::var("FLOWT_DIR")
-        .map(|dir| format!("{}/workflows", dir))
+        .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.flowt/workflows", home)
+            dirs::home_dir()
+                .map(|mut home| {
+                    home.push(".flowt");
+                    home
+                })
+                .unwrap_or_else(|| PathBuf::from("."))
         })
+        .join("workflows")
 }
 
 // Helper function to log with persistence
@@ -79,7 +85,7 @@ fn load_historical_logs(logs: &SharedLogs) {
 }
 
 
-async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: SharedLogs) {
+async fn start_cron_scheduler(workflows_dir: &Path, engine: Arc<Engine>, logs: SharedLogs) {
     let mut last_execution_times: HashMap<String, DateTime<Utc>> = HashMap::new();
 
     loop {
@@ -197,7 +203,7 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                 &logs,
                 "System",
                 LogLevel::Error,
-                &format!("Could not load workflows from {}", workflows_dir),
+                &format!("Could not load workflows from {}", workflows_dir.display()),
             );
         }
 
@@ -214,8 +220,8 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
 )]
 struct Cli {
     /// Directory containing workflow YAML files (used when launching TUI by default)
-    #[arg(short, long, default_value_t = default_workflows_dir())]
-    dir: String,
+    #[arg(short, long, default_value_os_t = default_workflows_dir())]
+    dir: PathBuf,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -231,23 +237,23 @@ enum Commands {
     /// Launch the TUI dashboard
     Tui {
         /// Directory containing workflow YAML files
-        #[arg(default_value_t = default_workflows_dir())]
-        dir: String,
+        #[arg(default_value_os_t = default_workflows_dir())]
+        dir: PathBuf,
     },
     /// Start the workflow service in terminal mode (logs only)
     Serve {
         /// Directory containing workflow YAML files
-        #[arg(default_value_t = default_workflows_dir())]
-        dir: String,
+        #[arg(default_value_os_t = default_workflows_dir())]
+        dir: PathBuf,
     },
     /// List workflows in a directory
     List {
-        #[arg(default_value_t = default_workflows_dir())]
-        dir: String,
+        #[arg(default_value_os_t = default_workflows_dir())]
+        dir: PathBuf,
     },
 }
 
-async fn run_tui(dir: &str) -> Result<()> {
+async fn run_tui(dir: &Path) -> Result<()> {
     if lock::is_engine_running() {
         println!("Connecting to running Flowt service...");
 
@@ -265,10 +271,13 @@ async fn run_tui(dir: &str) -> Result<()> {
             &logs,
             "System",
             LogLevel::Info,
-            &format!("TUI connected to running service - workflows in: {}", dir),
+            &format!(
+                "TUI connected to running service - workflows in: {}",
+                dir.display()
+            ),
         );
 
-        let mut app = tui::App::new(runs, dir.to_string(), engine.clone(), logs.clone());
+        let mut app = tui::App::new(runs, dir.to_path_buf(), engine.clone(), logs.clone());
 
         // Set service mode flag to prevent duplicate scheduling
         app.service_mode = true;
@@ -281,7 +290,7 @@ async fn run_tui(dir: &str) -> Result<()> {
                 app.engine_takeover_requested = false;
                 app.service_mode = false;
                 let engine_cron = engine.clone();
-                let dir_cron = dir.to_string();
+                let dir_cron = dir.to_path_buf();
                 let logs_cron = logs.clone();
                 tokio::spawn(async move {
                     start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
@@ -333,7 +342,7 @@ async fn run_tui(dir: &str) -> Result<()> {
             LogLevel::Info,
             &format!(
                 "TUI started with full engine - monitoring workflows in: {}",
-                dir
+                dir.display()
             ),
         );
 
@@ -342,7 +351,7 @@ async fn run_tui(dir: &str) -> Result<()> {
 
         // Start cron scheduler in background (TUI acts as full engine)
         let engine_cron = engine.clone();
-        let dir_cron = dir.to_string();
+        let dir_cron = dir.to_path_buf();
         let logs_cron = logs.clone();
         tokio::spawn(async move {
             start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
@@ -384,7 +393,7 @@ async fn run_tui(dir: &str) -> Result<()> {
             );
         }
 
-        let mut app = tui::App::new(runs, dir.to_string(), engine.clone(), logs.clone());
+        let mut app = tui::App::new(runs, dir.to_path_buf(), engine.clone(), logs.clone());
         loop {
             app.run()?;
 
@@ -463,7 +472,7 @@ async fn main() -> Result<()> {
 
         Some(Commands::List { dir }) => {
             let workflows = WorkflowConfig::load_all(&dir, None)?;
-            println!("Workflows in {}:\n", dir);
+            println!("Workflows in {}:\n", dir.display());
             for wf in &workflows {
                 println!("  {} — {} nodes", wf.name, wf.nodes.len());
                 if !wf.description.is_empty() {
@@ -505,7 +514,10 @@ async fn main() -> Result<()> {
             // Set service status to running
             let _ = lock::set_engine_status(true);
 
-            println!("Starting Flowt service - monitoring workflows in: {}", dir);
+            println!(
+                "Starting Flowt service - monitoring workflows in: {}",
+                dir.display()
+            );
             println!("Logs will be displayed below. Use Ctrl+C to stop.\n");
 
             let engine = Arc::new(Engine::new());
@@ -524,7 +536,7 @@ async fn main() -> Result<()> {
                 &logs,
                 "System",
                 LogLevel::Info,
-                &format!("Flowt service started - monitoring workflows in: {}", dir),
+                &format!("Flowt service started - monitoring workflows in: {}", dir.display()),
             );
 
             let workflows = WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();

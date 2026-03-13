@@ -26,6 +26,7 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -67,7 +68,7 @@ pub struct App {
     pub selected_run: usize,
     pub detail_scroll: u16,
     pub focused_panel: FocusedPanel,
-    pub workflows_dir: String,
+    pub workflows_dir: PathBuf,
     pub engine: Arc<Engine>,
     pub logs: SharedLogs,
     pub current_view: AppView,
@@ -105,7 +106,7 @@ pub enum FocusedPanel {
 impl App {
     pub fn new(
         runs: SharedRuns,
-        workflows_dir: String,
+        workflows_dir: PathBuf,
         engine: Arc<Engine>,
         logs: SharedLogs,
     ) -> Self {
@@ -611,7 +612,7 @@ impl App {
                 let path = entry.path();
                 let extension = path.extension().and_then(|e| e.to_str());
                 if extension == Some("yaml") || extension == Some("yml") {
-                    if let Ok(workflow) = WorkflowConfig::load(path.to_str().unwrap_or("")) {
+                    if let Ok(workflow) = WorkflowConfig::load(&path) {
                         if workflow.name == *workflow_name {
                             self.edit_requested = Some(path.to_string_lossy().to_string());
                             return true; // Signal to exit TUI
@@ -767,10 +768,10 @@ impl App {
                 let path = entry.path();
                 let extension = path.extension().and_then(|e| e.to_str());
                 if extension == Some("yaml") || extension == Some("yml") {
-                    if let Ok(mut workflow) = WorkflowConfig::load(path.to_str().unwrap_or("")) {
+                    if let Ok(mut workflow) = WorkflowConfig::load(&path) {
                         if workflow.name == *workflow_name {
                             workflow.toggle_enabled();
-                            match workflow.save(path.to_str().unwrap_or("")) {
+                            match workflow.save(&path) {
                                 Ok(_) => {
                                     let new_state = if current_enabled {
                                         "disabled"
@@ -799,7 +800,7 @@ impl App {
                 "System",
                 format!(
                     "Failed to access workflows directory: {}",
-                    self.workflows_dir
+                    self.workflows_dir.display()
                 ),
             );
         }
@@ -824,7 +825,7 @@ impl App {
                     format!(
                         "Loaded {} workflows from {}",
                         configs.len(),
-                        self.workflows_dir
+                        self.workflows_dir.display()
                     ),
                 );
             }
@@ -840,7 +841,6 @@ impl App {
         workflow_configs.sort_by(|a, b| a.name.cmp(&b.name));
         workflow_configs
     }
-
     fn get_runs_and_scheduled_for_selected_workflow(&self) -> Vec<RunOrScheduled> {
         let workflows = self.get_unique_workflows();
 

@@ -14,6 +14,21 @@ A powerful workflow automation engine built in Rust. Define workflows as YAML fi
   <img src="https://github.com/user-attachments/assets/6de8e05d-c098-4709-8cae-2a61e7317c7d" alt="Flowt Demo GIF" width="800"/>
 </p>
 
+<div style="display: flex; justify-content: center; gap: 10px;">
+  <figure>
+    <img width="400" height="728" alt="Task Details Screen" src="https://github.com/user-attachments/assets/8e2e2fba-708b-42cf-9207-9dd4f055f254" />
+    <figcaption>Task Details Screen</figcaption>
+  </figure>
+  <figure>
+    <img width="400" height="728" alt="Description Screen" src="https://github.com/user-attachments/assets/8bded1d7-ff7b-4ce4-9440-b7b8f827afe7" />
+    <figcaption>Description Screen</figcaption>
+  </figure>
+  <figure>
+    <img width="400" height="728" alt="Workflows Screen" src="https://github.com/user-attachments/assets/1b213f1f-d216-452e-9992-6b73d495b056" />
+    <figcaption>Workflows Screen</figcaption>
+  </figure>
+</div>
+
 ## Features
 
 - **Fast & Lightweight**: Built in Rust for maximum performance

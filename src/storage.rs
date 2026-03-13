@@ -4,6 +4,7 @@ use polodb_core::Database;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 use crate::engine::{NodeResult, RunStatus, WorkflowRun};
 use crate::tui::{LogEntry, LogLevel};
@@ -53,9 +54,9 @@ impl StorageService {
         Self::new_with_path(&db_path)
     }
 
-    pub fn new_with_path(db_path: &str) -> Result<Self> {
+    pub fn new_with_path<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         // Ensure parent directory exists
-        if let Some(parent) = std::path::Path::new(&db_path).parent() {
+        if let Some(parent) = db_path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
 
@@ -63,14 +64,18 @@ impl StorageService {
         Ok(Self { db })
     }
 
-    fn get_db_path() -> Result<String> {
+    fn get_db_path() -> Result<PathBuf> {
         let db_path = std::env::var("FLOWT_DIR")
-            .map(|dir| format!("{}/flowt_storage.db", dir))
+            .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                format!("{}/.flowt/flowt_storage.db", home)
+                dirs::home_dir()
+                    .map(|mut home| {
+                        home.push(".flowt");
+                        home
+                    })
+                    .unwrap_or_else(|| PathBuf::from("."))
             });
-        Ok(db_path)
+        Ok(db_path.join("flowt_storage.db"))
     }
 
     // Workflow Run Operations

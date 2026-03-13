@@ -3,6 +3,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,19 +72,19 @@ fn default_enabled() -> bool {
 }
 
 impl WorkflowConfig {
-    pub fn load(path: &str) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Could not read workflow file: {}", path))?;
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(path.as_ref())
+            .with_context(|| format!("Could not read workflow file: {:?}", path.as_ref()))?;
         let config: WorkflowConfig =
             serde_yaml::from_str(&content).context("Failed to parse workflow YAML")?;
         Ok(config)
     }
 
-    pub fn save(&self, path: &str) -> Result<()> {
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content =
             serde_yaml::to_string(self).context("Failed to serialize workflow to YAML")?;
-        fs::write(path, content)
-            .with_context(|| format!("Could not write workflow file: {}", path))?;
+        fs::write(path.as_ref(), content)
+            .with_context(|| format!("Could not write workflow file: {:?}", path.as_ref()))?;
         Ok(())
     }
 
@@ -91,25 +92,25 @@ impl WorkflowConfig {
         self.enabled = !self.enabled;
     }
 
-    pub fn load_all(
-        dir: &str,
+    pub fn load_all<P: AsRef<Path>>(
+        dir: P,
         logs: Option<Arc<Mutex<HashMap<String, Vec<crate::tui::LogEntry>>>>>,
     ) -> Result<Vec<Self>> {
         let mut workflows = vec![];
-        let entries = fs::read_dir(dir).context("Could not read workflows directory")?;
+        let entries = fs::read_dir(dir.as_ref()).context("Could not read workflows directory")?;
 
         for entry in entries.flatten() {
             let path = entry.path();
             // Check for both .yaml and .yml extensions
             let extension = path.extension().and_then(|e| e.to_str());
             if extension == Some("yaml") || extension == Some("yml") {
-                let path_str = path.to_str().unwrap_or("");
-                match Self::load(path_str) {
+                match Self::load(&path) {
                     Ok(wf) => {
                         workflows.push(wf);
                     }
                     Err(e) => {
-                        let error_msg = format!("✗ Failed to load workflow {}: {}", path_str, e);
+                        let error_msg =
+                            format!("✗ Failed to load workflow {:?}: {}", path, e);
 
                         if let Some(logs_ref) = &logs {
                             // Log to the shared logs if available

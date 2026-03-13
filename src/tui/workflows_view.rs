@@ -150,7 +150,7 @@ impl App {
                 Line::from("No workflows found."),
                 Line::from(""),
                 Line::from("Create a workflow YAML file in the"),
-                Line::from(format!("{} directory.", self.workflows_dir)),
+                Line::from(format!("{} directory.", self.workflows_dir.display())),
                 Line::from(""),
                 Line::from("Press 't' to refresh and trigger workflows."),
             ]
