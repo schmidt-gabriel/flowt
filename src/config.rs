@@ -120,15 +120,15 @@ impl WorkflowConfig {
                                 let entry = crate::tui::LogEntry {
                                     timestamp: Utc::now(),
                                     level: crate::tui::LogLevel::Error,
-                                    message: error_msg,
+                                    message: error_msg.clone(),
                                 };
                                 workflow_logs.push(entry);
                             }
                         } else {
                             // Fallback to stderr if logs not available
-                            eprintln!("{}", error_msg);
+                            eprintln!("{}", &error_msg);
                         }
-                        std::process::exit(1);
+                        return Err(anyhow::anyhow!(error_msg));
                     }
                 }
             }

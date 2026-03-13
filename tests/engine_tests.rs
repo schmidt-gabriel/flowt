@@ -443,3 +443,74 @@ fn test_workflow_run_id_uniqueness() {
     // IDs should be unique (based on timestamp)
     assert_ne!(run1.id, run2.id);
 }
+
+#[tokio::test]
+async fn test_workflow_execution_when_condition() {
+    let engine = Engine::new();
+
+    let workflow = WorkflowConfig {
+        name: "test_when_condition_workflow".to_string(),
+        description: "Test workflow with 'when' conditions".to_string(),
+        enabled: true,
+        triggers: vec![TriggerConfig::Manual],
+        nodes: vec![
+            NodeConfig {
+                id: "first".to_string(),
+                kind: NodeKind::Log {
+                    message: "Always runs".to_string(),
+                },
+                when: None,
+                retry: None,
+                timeout: None,
+                depends_on: vec![],
+            },
+            NodeConfig {
+                id: "second".to_string(),
+                kind: NodeKind::Log {
+                    message: "Runs because first succeeded".to_string(),
+                },
+                when: Some("first == success".to_string()),
+                retry: None,
+                timeout: None,
+                depends_on: vec!["first".to_string()],
+            },
+            NodeConfig {
+                id: "third".to_string(),
+                kind: NodeKind::Log {
+                    message: "Is skipped because first did not fail".to_string(),
+                },
+                when: Some("first == failed".to_string()),
+                retry: None,
+                timeout: None,
+                depends_on: vec!["first".to_string()],
+            },
+        ],
+    };
+
+    let result = engine.run_workflow(&workflow).await;
+    assert!(result.is_ok());
+
+    let run = result.unwrap();
+    assert_eq!(run.status, RunStatus::Success);
+    assert_eq!(run.node_results.len(), 3);
+
+    let first_result = run
+        .node_results
+        .iter()
+        .find(|r| r.node_id == "first")
+        .unwrap();
+    let second_result = run
+        .node_results
+        .iter()
+        .find(|r| r.node_id == "second")
+        .unwrap();
+    let third_result = run
+        .node_results
+        .iter()
+        .find(|r| r.node_id == "third")
+        .unwrap();
+
+    assert_eq!(first_result.status, NodeStatus::Success);
+    assert_eq!(second_result.status, NodeStatus::Success);
+    assert_eq!(third_result.status, NodeStatus::Skipped);
+}

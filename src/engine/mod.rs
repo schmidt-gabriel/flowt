@@ -1,4 +1,5 @@
 use crate::config::{NodeConfig, NodeKind, WorkflowConfig};
+use self::expression::Expression;
 use crate::storage::StorageService;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+pub mod expression;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeStatus {
@@ -122,7 +124,25 @@ impl Engine {
                     .map_or(false, |result| matches!(result.status, NodeStatus::Success))
             });
 
-            let result = if dependencies_satisfied || node.depends_on.is_empty() {
+            // Evaluate the 'when' condition if it exists
+            let when_condition_met = if let Some(when) = &node.when {
+                // Parse the expression and evaluate it
+                Expression::parse(when).map_or(true, |expr: Expression| expr.evaluate(&context))
+            } else {
+                true // No 'when' condition means it's always met
+            };
+
+            let result = if !when_condition_met {
+                // Skip if 'when' condition is not met
+                NodeResult {
+                    node_id: node.id.clone(),
+                    status: NodeStatus::Skipped,
+                    output: "Skipped due to 'when' condition".to_string(),
+                    response_data: None,
+                    started_at: Utc::now(),
+                    finished_at: Some(Utc::now()),
+                }
+            } else if dependencies_satisfied || node.depends_on.is_empty() {
                 self.execute_node(node, &context, &run.id).await
             } else {
                 // Skip if dependencies failed
@@ -176,6 +196,8 @@ impl Engine {
 
         Ok(run)
     }
+
+
 
     // Topological sort to determine execution order based on dependencies
     pub fn topological_sort(&self, nodes: &[NodeConfig]) -> Result<Vec<String>> {

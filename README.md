@@ -66,7 +66,7 @@ flowt
 flowt -d /path/to/workflows
 
 # Run a workflow file directly
-flowt run workflows/health-check.yaml
+flowt run workflows/simple_workflow.yaml
 
 # Launch the TUI dashboard explicitly
 flowt tui [workflows-directory]
@@ -126,7 +126,7 @@ flowt tui [workflows-directory]  # Automatically detects and connects
 ```
 
 **Features:**
-- **Persistent Engine**: Cron jobs and workflows continue running in the background
+- **Persistent Engine**: Cron jobs and workflows continue running in the background. Note: on startup, the service will automatically run all manual-trigger workflows.
 - **Multiple TUI Connections**: Connect multiple TUI instances to the same service
 - **Terminal Logs**: Real-time colored logs in the service terminal
 - **Shared State**: All TUI connections share the same workflow runs and history
@@ -135,8 +135,8 @@ flowt tui [workflows-directory]  # Automatically detects and connects
 #### Smart Mode Detection
 
 The TUI automatically detects which mode to use:
-- ** Connected to Flowt service**: When `flowt serve` is running, TUI connects as UI-only
-- ** TUI Engine Mode**: When no service is running, TUI starts full engine with cron scheduling
+- **▶ Connected to Flowt service**: When `flowt serve` is running, TUI connects as UI-only
+- **▶ TUI Engine Mode**: When no service is running, TUI starts full engine with cron scheduling
 
 This prevents duplicate cron jobs while ensuring automation is always available.
 
@@ -211,6 +211,27 @@ nodes:
   cmd: "rm -rf temp/"
   when: "build == success"  # Only run if 'build' node succeeded
 ```
+
+#### Explicit Dependencies
+```yaml
+- id: deploy
+  type: shell
+  cmd: "echo 'Deploying'"
+  depends_on:
+    - build
+    - test
+```
+
+#### Disabling Workflows
+You can disable a workflow by adding `enabled: false` to the top level of the workflow file.
+```yaml
+name: my-workflow
+enabled: false
+...
+```
+
+#### Response Interpolation
+You can interpolate values from the output of previous steps. For more details, see the [Response Interpolation documentation](docs/RESPONSE_INTERPOLATION.md).
 
 #### Retries and Timeouts
 ```yaml
@@ -289,7 +310,7 @@ Flowt supports environment variable substitution in workflow files using the `${
 
 Check the `workflows/` directory for example workflow configurations:
 
-- **health-check.yaml**: Simple service health check workflow
+- **simple_workflow.yaml**: Simple service health check workflow
 
 ## Development
 

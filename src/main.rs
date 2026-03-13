@@ -96,7 +96,7 @@ async fn start_cron_scheduler(workflows_dir: &str, engine: Arc<Engine>, logs: Sh
                                     // Check if we're at or past the scheduled time
                                     let time_to_next = (next - now).num_seconds();
 
-                                    if time_to_next == 0 {
+                                    if time_to_next <= 1 {
                                         // Create execution key based on scheduled time
                                         let execution_key = format!(
                                             "{}_{}",
@@ -245,6 +245,171 @@ enum Commands {
         #[arg(default_value_t = default_workflows_dir())]
         dir: String,
     },
+}
+
+async fn run_tui(dir: &str) -> Result<()> {
+    if lock::is_engine_running() {
+        println!("Connecting to running Flowt service...");
+
+        // In service mode: TUI connects to existing service - no engine startup
+        let engine = Arc::new(Engine::new());
+        let _ = engine.load_history();
+        let runs = engine.runs.clone();
+
+        // Create shared logs and load from database only
+        let logs = Arc::new(Mutex::new(HashMap::new()));
+        load_historical_logs(&logs);
+
+        // Add connection log entry
+        log_to_persistent_storage(
+            &logs,
+            "System",
+            LogLevel::Info,
+            &format!("TUI connected to running service - workflows in: {}", dir),
+        );
+
+        let mut app = tui::App::new(runs, dir.to_string(), engine.clone(), logs.clone());
+
+        // Set service mode flag to prevent duplicate scheduling
+        app.service_mode = true;
+
+        loop {
+            app.run()?;
+
+            if app.engine_takeover_requested {
+                // Engine died — this TUI claims the engine role
+                app.engine_takeover_requested = false;
+                app.service_mode = false;
+                let engine_cron = engine.clone();
+                let dir_cron = dir.to_string();
+                let logs_cron = logs.clone();
+                tokio::spawn(async move {
+                    start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
+                });
+                // Continue loop — TUI restarts as full engine
+            } else if let Some(file_path) = app.edit_requested.clone() {
+                // Exit TUI cleanly
+                disable_raw_mode()?;
+                execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+                // Edit the file
+                tui::App::edit_workflow_external(&file_path);
+
+                // Reset edit request and restart TUI
+                app.edit_requested = None;
+                enable_raw_mode()?;
+                execute!(std::io::stdout(), EnterAlternateScreen)?;
+            } else {
+                break; // Normal exit
+            }
+        }
+
+        // Release engine lock if this TUI took over as engine
+        if !app.service_mode {
+            let _ = lock::set_engine_status(false);
+        }
+    } else {
+        // No service running: TUI acts as full engine with cron scheduling
+        // Claim the engine lock so other TUI instances start as UI-only
+        let _ = lock::set_engine_status(true);
+
+        let engine = Arc::new(Engine::new());
+
+        // Load historical runs from database
+        let _ = engine.load_history();
+
+        let runs = engine.runs.clone();
+
+        // Create shared logs
+        let logs = Arc::new(Mutex::new(HashMap::new()));
+
+        // Load historical logs from database
+        load_historical_logs(&logs);
+
+        // Add startup log entry
+        log_to_persistent_storage(
+            &logs,
+            "System",
+            LogLevel::Info,
+            &format!(
+                "TUI started with full engine - monitoring workflows in: {}",
+                dir
+            ),
+        );
+
+        let workflows =
+            WorkflowConfig::load_all(dir, Some(logs.clone())).unwrap_or_default();
+
+        // Start cron scheduler in background (TUI acts as full engine)
+        let engine_cron = engine.clone();
+        let dir_cron = dir.to_string();
+        let logs_cron = logs.clone();
+        tokio::spawn(async move {
+            start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
+        });
+
+        // Run all enabled manual-trigger workflows in background
+        let mut auto_run_count = 0;
+        for wf in workflows {
+            if wf.enabled {
+                // Only auto-run workflows with manual triggers
+                let has_manual_trigger = wf
+                    .triggers
+                    .iter()
+                    .any(|t| matches!(t, TriggerConfig::Manual));
+                if has_manual_trigger {
+                    auto_run_count += 1;
+                    let workflow_name = wf.name.clone();
+                    let engine_clone = engine.clone();
+                    let logs_clone = logs.clone();
+                    tokio::spawn(async move {
+                        log_to_persistent_storage(
+                            &logs_clone,
+                            &workflow_name,
+                            LogLevel::Info,
+                            &format!("Auto-starting workflow: {}", workflow_name),
+                        );
+                        let _ = engine_clone.run_workflow(&wf).await;
+                    });
+                }
+            }
+        }
+
+        if auto_run_count > 0 {
+            log_to_persistent_storage(
+                &logs,
+                "System",
+                LogLevel::Info,
+                &format!("Started {} workflows automatically", auto_run_count),
+            );
+        }
+
+        let mut app = tui::App::new(runs, dir.to_string(), engine.clone(), logs.clone());
+        loop {
+            app.run()?;
+
+            // Check if edit was requested
+            if let Some(file_path) = app.edit_requested.clone() {
+                // Exit TUI cleanly
+                disable_raw_mode()?;
+                execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+                // Edit the file
+                tui::App::edit_workflow_external(&file_path);
+
+                // Reset edit request and restart TUI
+                app.edit_requested = None;
+                enable_raw_mode()?;
+                execute!(std::io::stdout(), EnterAlternateScreen)?;
+            } else {
+                break; // Normal exit
+            }
+        }
+
+        // Release engine lock on exit
+        let _ = lock::set_engine_status(false);
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -492,299 +657,11 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Tui { dir }) => {
-            if lock::is_engine_running() {
-                println!("Connecting to running Flowt service...");
-
-                // In service mode: TUI connects to existing service - no engine startup
-                let engine = Arc::new(Engine::new());
-                let _ = engine.load_history();
-                let runs = engine.runs.clone();
-
-                // Create shared logs and load from database only
-                let logs = Arc::new(Mutex::new(HashMap::new()));
-                load_historical_logs(&logs);
-
-                // Add connection log entry
-                log_to_persistent_storage(
-                    &logs,
-                    "System",
-                    LogLevel::Info,
-                    &format!("TUI connected to running service - workflows in: {}", dir),
-                );
-
-                let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
-
-                // Set service mode flag to prevent duplicate scheduling
-                app.service_mode = true;
-
-                loop {
-                    app.run()?;
-
-                    if app.engine_takeover_requested {
-                        // Engine died — this TUI claims the engine role
-                        app.engine_takeover_requested = false;
-                        app.service_mode = false;
-                        let engine_cron = engine.clone();
-                        let dir_cron = dir.clone();
-                        let logs_cron = logs.clone();
-                        tokio::spawn(async move {
-                            start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
-                        });
-                        // Continue loop — TUI restarts as full engine
-                    } else if let Some(file_path) = app.edit_requested.clone() {
-                        // Exit TUI cleanly
-                        disable_raw_mode()?;
-                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
-
-                        // Edit the file
-                        tui::App::edit_workflow_external(&file_path);
-
-                        // Reset edit request and restart TUI
-                        app.edit_requested = None;
-                        enable_raw_mode()?;
-                        execute!(std::io::stdout(), EnterAlternateScreen)?;
-                    } else {
-                        break; // Normal exit
-                    }
-                }
-
-                // Release engine lock if this TUI took over as engine
-                if !app.service_mode {
-                    let _ = lock::set_engine_status(false);
-                }
-            } else {
-                // No service running: TUI acts as full engine with cron scheduling
-                // Claim the engine lock so other TUI instances start as UI-only
-                let _ = lock::set_engine_status(true);
-
-                let engine = Arc::new(Engine::new());
-
-                // Load historical runs from database
-                let _ = engine.load_history();
-
-                let runs = engine.runs.clone();
-
-                // Create shared logs
-                let logs = Arc::new(Mutex::new(HashMap::new()));
-
-                // Load historical logs from database
-                load_historical_logs(&logs);
-
-                // Add startup log entry
-                log_to_persistent_storage(
-                    &logs,
-                    "System",
-                    LogLevel::Info,
-                    &format!(
-                        "TUI started with full engine - monitoring workflows in: {}",
-                        dir
-                    ),
-                );
-
-                let workflows =
-                    WorkflowConfig::load_all(&dir, Some(logs.clone())).unwrap_or_default();
-
-                // Start cron scheduler in background (TUI acts as full engine)
-                let engine_cron = engine.clone();
-                let dir_cron = dir.clone();
-                let logs_cron = logs.clone();
-                tokio::spawn(async move {
-                    start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
-                });
-
-                // Run all enabled manual-trigger workflows in background
-                let mut auto_run_count = 0;
-                for wf in workflows {
-                    if wf.enabled {
-                        // Only auto-run workflows with manual triggers
-                        let has_manual_trigger = wf
-                            .triggers
-                            .iter()
-                            .any(|t| matches!(t, TriggerConfig::Manual));
-                        if has_manual_trigger {
-                            auto_run_count += 1;
-                            let workflow_name = wf.name.clone();
-                            let engine_clone = engine.clone();
-                            let logs_clone = logs.clone();
-                            tokio::spawn(async move {
-                                log_to_persistent_storage(
-                                    &logs_clone,
-                                    &workflow_name,
-                                    LogLevel::Info,
-                                    &format!("Auto-starting workflow: {}", workflow_name),
-                                );
-                                let _ = engine_clone.run_workflow(&wf).await;
-                            });
-                        }
-                    }
-                }
-
-                if auto_run_count > 0 {
-                    log_to_persistent_storage(
-                        &logs,
-                        "System",
-                        LogLevel::Info,
-                        &format!("Started {} workflows automatically", auto_run_count),
-                    );
-                }
-
-                let mut app = tui::App::new(runs, dir.clone(), engine.clone(), logs.clone());
-                loop {
-                    app.run()?;
-
-                    // Check if edit was requested
-                    if let Some(file_path) = app.edit_requested.clone() {
-                        // Exit TUI cleanly
-                        disable_raw_mode()?;
-                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
-
-                        // Edit the file
-                        tui::App::edit_workflow_external(&file_path);
-
-                        // Reset edit request and restart TUI
-                        app.edit_requested = None;
-                        enable_raw_mode()?;
-                        execute!(std::io::stdout(), EnterAlternateScreen)?;
-                    } else {
-                        break; // Normal exit
-                    }
-                }
-
-                // Release engine lock on exit
-                let _ = lock::set_engine_status(false);
-            }
+            run_tui(&dir).await?;
         }
 
         None => {
-            if lock::is_engine_running() {
-                println!("🔗 Connecting to running Flowt service...");
-
-                // In service mode: TUI connects to existing service - no engine startup
-                let engine = Arc::new(Engine::new());
-                let _ = engine.load_history();
-                let runs = engine.runs.clone();
-
-                // Create shared logs and load from database only
-                let logs = Arc::new(Mutex::new(HashMap::new()));
-                load_historical_logs(&logs);
-
-                // Add connection log entry
-                log_to_persistent_storage(
-                    &logs,
-                    "System",
-                    LogLevel::Info,
-                    &format!(
-                        "TUI connected to running service - workflows in: {}",
-                        cli.dir
-                    ),
-                );
-
-                let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
-
-                // Set service mode flag to prevent duplicate scheduling
-                app.service_mode = true;
-
-                loop {
-                    app.run()?;
-
-                    if app.engine_takeover_requested {
-                        // Engine died — this TUI claims the engine role
-                        app.engine_takeover_requested = false;
-                        app.service_mode = false;
-                        let engine_cron = engine.clone();
-                        let dir_cron = cli.dir.clone();
-                        let logs_cron = logs.clone();
-                        tokio::spawn(async move {
-                            start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
-                        });
-                        // Continue loop — TUI restarts as full engine
-                    } else if let Some(file_path) = app.edit_requested.clone() {
-                        // Exit TUI cleanly
-                        disable_raw_mode()?;
-                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
-
-                        // Edit the file
-                        tui::App::edit_workflow_external(&file_path);
-
-                        // Reset edit request and restart TUI
-                        app.edit_requested = None;
-                        enable_raw_mode()?;
-                        execute!(std::io::stdout(), EnterAlternateScreen)?;
-                    } else {
-                        break; // Normal exit
-                    }
-                }
-
-                // Release engine lock if this TUI took over as engine
-                if !app.service_mode {
-                    let _ = lock::set_engine_status(false);
-                }
-            } else {
-                // Default to TUI mode with the default directory (original behavior)
-                // Claim the engine lock so other TUI instances start as UI-only
-                let _ = lock::set_engine_status(true);
-
-                let engine = Arc::new(Engine::new());
-
-                // Load historical runs from database
-                let _ = engine.load_history();
-
-                let runs = engine.runs.clone();
-
-                // Create shared logs
-                let logs = Arc::new(Mutex::new(HashMap::new()));
-
-                // Load historical logs from database
-                load_historical_logs(&logs);
-
-                // Add startup log entry
-                // Add startup log entry
-                log_to_persistent_storage(
-                    &logs,
-                    "System",
-                    LogLevel::Info,
-                    &format!(
-                        "TUI started with full engine - monitoring workflows in: {}",
-                        cli.dir
-                    ),
-                );
-
-                // Start cron scheduler in background (TUI acts as full engine when no service running)
-                let engine_cron = engine.clone();
-                let dir_cron = cli.dir.clone();
-                let logs_cron = logs.clone();
-                tokio::spawn(async move {
-                    start_cron_scheduler(&dir_cron, engine_cron, logs_cron).await;
-                });
-
-                // Manual workflows are triggered explicitly through the TUI interface
-                // No auto-execution of manual workflows at startup
-
-                let mut app = tui::App::new(runs, cli.dir.clone(), engine.clone(), logs.clone());
-                loop {
-                    app.run()?;
-
-                    // Check if edit was requested
-                    if let Some(file_path) = app.edit_requested.clone() {
-                        // Exit TUI cleanly
-                        disable_raw_mode()?;
-                        execute!(std::io::stdout(), LeaveAlternateScreen)?;
-
-                        // Edit the file
-                        tui::App::edit_workflow_external(&file_path);
-
-                        // Reset edit request and restart TUI
-                        app.edit_requested = None;
-                        enable_raw_mode()?;
-                        execute!(std::io::stdout(), EnterAlternateScreen)?;
-                    } else {
-                        break; // Normal exit
-                    }
-                }
-
-                // Release engine lock on exit
-                let _ = lock::set_engine_status(false);
-            }
+            run_tui(&cli.dir).await?;
         }
     }
 
